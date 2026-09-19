@@ -83,11 +83,19 @@ class App(BaseHTTPRequestHandler):
             except Exception:
                 self._html("<h1>Gmail connection failed</h1><p>Check the OAuth redirect URI, Gmail API, and server credentials, then try again.</p>", 502)
             return
+        if parsed.path == "/logout":
+            self._html("<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Your local CargoVeritas session has ended.</p><p><a href='/'>Return to dashboard</a></p></main>")
+            return
+        if parsed.path == "/settings":
+            configured = bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+            gmail_status = "Ready to connect" if configured else "Needs server configuration"
+            self._html("<main style='max-width:760px;margin:60px auto;padding:32px;font-family:Times New Roman,serif;color:#09284b'><p><a href='/app/overview'>← Back to dashboard</a></p><h1>Workspace settings</h1><p>Manage your company mailbox connection and account preferences.</p><section style='border:1px solid #dce5ef;border-radius:14px;padding:24px;margin-top:24px'><h2>Gmail connection</h2><p><b>Status:</b> " + gmail_status + "</p><p>CargoVeritas requests read-only access and never displays your client secret in the browser.</p><p><a href='/auth/gmail' style='display:inline-block;background:#0d6efd;color:white;padding:11px 16px;border-radius:8px;text-decoration:none'>Connect Gmail account</a></p></section><section style='border:1px solid #dce5ef;border-radius:14px;padding:24px;margin-top:18px'><h2>Account</h2><p>Avery Logistics · Operations Administrator</p><p><a href='/logout'>Log out</a></p></section></main>")
+            return
         if parsed.path == "/bol/BL-2026-0918-8821.pdf":
             data, content_type = Path("BL-2026-0918-8821.pdf").read_bytes(), "application/pdf"
-        elif self.path in ("/", "/index.html") or self.path.startswith("/app/") or self.path == "/settings":
-            section = self.path.rsplit("/", 1)[-1].replace("-", " ").title()
-            if self.path in ("/", "/index.html"):
+        elif parsed.path in ("/", "/index.html") or parsed.path.startswith("/app/"):
+            section = parsed.path.rsplit("/", 1)[-1].replace("-", " ").title()
+            if parsed.path in ("/", "/index.html"):
                 section = "Overview"
             enhancement = """<script>
 document.body.innerHTML=document.body.innerHTML.replaceAll("$","RM ");
@@ -98,9 +106,24 @@ document.getElementById("connect").onclick=function(){openModal("Connect Gmail m
 document.querySelectorAll("nav button[data-view]").forEach(function(b){b.onclick=function(){location.href="/app/"+b.dataset.view.toLowerCase().replaceAll(" ","-")}});
 var title=document.getElementById("title");if(title)title.textContent=""" + repr(section) + """;
 </script>"""
-            if self.path == "/settings":
-                enhancement += """<script>openModal("Settings","Workspace, account, and Gmail connection settings.","<h3>Gmail connection</h3><p>Use a Google Cloud OAuth application with the Gmail read-only scope. Do not place client secrets in this browser.</p><div class='item'><div><b>Google OAuth Client ID</b><small>Configure in server environment: GOOGLE_CLIENT_ID</small></div><span class='pill review'>Not configured</span></div><div class='item'><div><b>Google OAuth Client Secret</b><small>Configure in server environment: GOOGLE_CLIENT_SECRET</small></div><span class='pill review'>Not configured</span></div><h3>Account</h3><p>Avery Logistics · Operations Administrator</p>")</script>"""
-            page = PAGE.replace("<button class='secondary' data-action='record'>Open record</button>", "<a class='secondary' href='/bol/BL-2026-0918-8821.pdf' target='_blank' download>Open &amp; download PDF</a>").replace("</body>", enhancement + "</body>")
+            links = {
+                '<button class="active" data-view="Overview">▦ &nbsp; Overview</button>': '<a href="/app/overview" style="display:block;color:#fff;padding:11px 12px;text-decoration:none;background:#204b7c;border-radius:8px">▦ &nbsp; Overview</a>',
+                '<button data-view="Inbox intelligence">✉ &nbsp; Inbox intelligence</button>': '<a href="/app/inbox-intelligence" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">✉ &nbsp; Inbox intelligence</a>',
+                '<button data-view="Shipment operations">▱ &nbsp; Shipment operations</button>': '<a href="/app/shipment-operations" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">▱ &nbsp; Shipment operations</a>',
+                '<button data-view="Verification queue">✓ &nbsp; Verification queue</button>': '<a href="/app/verification-queue" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">✓ &nbsp; Verification queue</a>',
+                '<button data-view="Bill of Lading vault">▣ &nbsp; Bill of Lading vault</button>': '<a href="/app/bill-of-lading-vault" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">▣ &nbsp; Bill of Lading vault</a>',
+                '<button data-view="Settlement calendar">◴ &nbsp; Settlement calendar</button>': '<a href="/app/settlement-calendar" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">◴ &nbsp; Settlement calendar</a>',
+                '<button class="filter" id="filter">This week ▾</button>': '<a class="filter" href="/app/shipment-operations?range=this-week" style="text-decoration:none">This week ▾</a>',
+                '<button class="link" id="inbox">View all emails →</button>': '<a class="link" href="/app/inbox-intelligence" style="text-decoration:none">View all emails →</a>',
+                '<button class="secondary" id="evidence">View evidence</button>': '<a class="secondary" href="/app/verification-queue" style="text-decoration:none">View evidence</a>',
+                '<button class="resolve" id="review">Review case</button>': '<a class="resolve" href="/app/verification-queue" style="text-decoration:none">Review case</a>',
+                '<button class="link" id="vault">Open vault →</button>': '<a class="link" href="/app/bill-of-lading-vault" style="text-decoration:none">Open vault →</a>',
+            }
+            page = PAGE.replace("<button class='secondary' data-action='record'>Open record</button>", "<a class='secondary' href='/bol/BL-2026-0918-8821.pdf' target='_blank' download>Open &amp; download PDF</a>").replace("<button class=\"primary\" id=\"connect\">Connect mailbox</button>", "<a class=\"primary\" href=\"/auth/gmail\" style=\"display:inline-block;text-decoration:none\">Connect mailbox</a>")
+            for source, target in links.items():
+                page = page.replace(source, target)
+            page = page.replace("</nav>", '<a href="/settings" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">⚙ &nbsp; Settings</a><a href="/logout" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">⇥ &nbsp; Log out</a></nav>')
+            page = page.replace("</body>", enhancement + "</body>")
             data, content_type = page.encode(), "text/html; charset=utf-8"
         elif self.path == "/api/dashboard":
             data, content_type = b'{"status":"ready"}', "application/json"
@@ -129,5 +152,4 @@ if __name__ == "__main__":
     load_local_env()
     print("CargoVeritas running at http://127.0.0.1:8000")
     ThreadingHTTPServer(("127.0.0.1", 8000), App).serve_forever()
-
 
