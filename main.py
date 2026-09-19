@@ -12,7 +12,7 @@ from loader import Inbox
 
 # Load secret key from .env file
 load_dotenv()
-client = OpenAI()
+client = OpenAI() 
 
 # ---------------------------------------------------------
 # 1. Attachment Reader (Multi-format)
