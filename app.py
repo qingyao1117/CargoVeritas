@@ -4,8 +4,10 @@ from pathlib import Path
 import json
 import os
 import secrets
+from io import BytesIO
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
+from zipfile import ZIP_DEFLATED, ZipFile
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -86,44 +88,25 @@ class App(BaseHTTPRequestHandler):
         if parsed.path == "/logout":
             self._html("<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Your local CargoVeritas session has ended.</p><p><a href='/'>Return to dashboard</a></p></main>")
             return
-        if parsed.path == "/settings":
-            configured = bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
-            gmail_status = "Ready to connect" if configured else "Needs server configuration"
-            self._html("<main style='max-width:760px;margin:60px auto;padding:32px;font-family:Times New Roman,serif;color:#09284b'><p><a href='/app/overview'>← Back to dashboard</a></p><h1>Workspace settings</h1><p>Manage your company mailbox connection and account preferences.</p><section style='border:1px solid #dce5ef;border-radius:14px;padding:24px;margin-top:24px'><h2>Gmail connection</h2><p><b>Status:</b> " + gmail_status + "</p><p>CargoVeritas requests read-only access and never displays your client secret in the browser.</p><p><a href='/auth/gmail' style='display:inline-block;background:#0d6efd;color:white;padding:11px 16px;border-radius:8px;text-decoration:none'>Connect Gmail account</a></p></section><section style='border:1px solid #dce5ef;border-radius:14px;padding:24px;margin-top:18px'><h2>Account</h2><p>Avery Logistics · Operations Administrator</p><p><a href='/logout'>Log out</a></p></section></main>")
-            return
-        if parsed.path == "/bol/BL-2026-0918-8821.pdf":
+        if parsed.path == "/bol/download":
+            selected = parse_qs(parsed.query).get("bol", [])
+            if not selected:
+                self._html("<h1>No BOLs selected</h1><p>Select one or more documents in the BOL vault first.</p><p><a href='/app/bill-of-lading-vault'>Open BOL vault</a></p>", 400)
+                return
+            source = Path("BL-2026-0918-8821.pdf").read_bytes()
+            archive = BytesIO()
+            with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
+                for bol in selected:
+                    safe_name = bol.replace("/", "").replace("\\", "")
+                    bundle.writestr(safe_name + ".pdf", source)
+            data, content_type, attachment_name = archive.getvalue(), "application/zip", "CargoVeritas-BOLs.zip"
+        elif parsed.path.startswith("/bol/") and parsed.path.endswith(".pdf"):
             data, content_type = Path("BL-2026-0918-8821.pdf").read_bytes(), "application/pdf"
-        elif parsed.path in ("/", "/index.html") or parsed.path.startswith("/app/"):
+        elif parsed.path in ("/", "/index.html", "/settings") or parsed.path.startswith("/app/"):
             section = parsed.path.rsplit("/", 1)[-1].replace("-", " ").title()
             if parsed.path in ("/", "/index.html"):
                 section = "Overview"
-            enhancement = """<script>
-document.body.innerHTML=document.body.innerHTML.replaceAll("$","RM ");
-var nav=document.querySelector("nav");
-var settings=document.createElement("button");settings.textContent="⚙  Settings";settings.onclick=function(){location.href="/settings"};nav.appendChild(settings);
-var logout=document.createElement("button");logout.textContent="⇥  Log out";logout.onclick=function(){document.body.innerHTML="<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Sign in again to access your CargoVeritas workspace.</p><a href='/' style='font-size:18px'>Return to sign in</a></main>"};nav.appendChild(logout);
-document.getElementById("connect").onclick=function(){openModal("Connect Gmail mailbox","Authorize a company Gmail inbox so CargoVeritas can read, classify, and verify shipping email.","<p>CargoVeritas uses Google OAuth with the Gmail read-only scope. You will select the company Gmail account on Google's consent screen.</p><a class='primary' href='/auth/gmail' style='display:inline-block;text-decoration:none'>Continue with Google</a>")};
-document.querySelectorAll("nav button[data-view]").forEach(function(b){b.onclick=function(){location.href="/app/"+b.dataset.view.toLowerCase().replaceAll(" ","-")}});
-var title=document.getElementById("title");if(title)title.textContent=""" + repr(section) + """;
-</script>"""
-            links = {
-                '<button class="active" data-view="Overview">▦ &nbsp; Overview</button>': '<a href="/app/overview" style="display:block;color:#fff;padding:11px 12px;text-decoration:none;background:#204b7c;border-radius:8px">▦ &nbsp; Overview</a>',
-                '<button data-view="Inbox intelligence">✉ &nbsp; Inbox intelligence</button>': '<a href="/app/inbox-intelligence" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">✉ &nbsp; Inbox intelligence</a>',
-                '<button data-view="Shipment operations">▱ &nbsp; Shipment operations</button>': '<a href="/app/shipment-operations" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">▱ &nbsp; Shipment operations</a>',
-                '<button data-view="Verification queue">✓ &nbsp; Verification queue</button>': '<a href="/app/verification-queue" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">✓ &nbsp; Verification queue</a>',
-                '<button data-view="Bill of Lading vault">▣ &nbsp; Bill of Lading vault</button>': '<a href="/app/bill-of-lading-vault" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">▣ &nbsp; Bill of Lading vault</a>',
-                '<button data-view="Settlement calendar">◴ &nbsp; Settlement calendar</button>': '<a href="/app/settlement-calendar" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">◴ &nbsp; Settlement calendar</a>',
-                '<button class="filter" id="filter">This week ▾</button>': '<a class="filter" href="/app/shipment-operations?range=this-week" style="text-decoration:none">This week ▾</a>',
-                '<button class="link" id="inbox">View all emails →</button>': '<a class="link" href="/app/inbox-intelligence" style="text-decoration:none">View all emails →</a>',
-                '<button class="secondary" id="evidence">View evidence</button>': '<a class="secondary" href="/app/verification-queue" style="text-decoration:none">View evidence</a>',
-                '<button class="resolve" id="review">Review case</button>': '<a class="resolve" href="/app/verification-queue" style="text-decoration:none">Review case</a>',
-                '<button class="link" id="vault">Open vault →</button>': '<a class="link" href="/app/bill-of-lading-vault" style="text-decoration:none">Open vault →</a>',
-            }
-            page = PAGE.replace("<button class='secondary' data-action='record'>Open record</button>", "<a class='secondary' href='/bol/BL-2026-0918-8821.pdf' target='_blank' download>Open &amp; download PDF</a>").replace("<button class=\"primary\" id=\"connect\">Connect mailbox</button>", "<a class=\"primary\" href=\"/auth/gmail\" style=\"display:inline-block;text-decoration:none\">Connect mailbox</a>")
-            for source, target in links.items():
-                page = page.replace(source, target)
-            page = page.replace("</nav>", '<a href="/settings" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">⚙ &nbsp; Settings</a><a href="/logout" style="display:block;color:#d6e2ef;padding:11px 12px;text-decoration:none">⇥ &nbsp; Log out</a></nav>')
-            page = page.replace("</body>", enhancement + "</body>")
+            page = self._workspace(section, parse_qs(parsed.query))
             data, content_type = page.encode(), "text/html; charset=utf-8"
         elif self.path == "/api/dashboard":
             data, content_type = b'{"status":"ready"}', "application/json"
@@ -133,8 +116,27 @@ var title=document.getElementById("title");if(title)title.textContent=""" + repr
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        if 'attachment_name' in locals():
+            self.send_header("Content-Disposition", "attachment; filename=" + attachment_name)
         self.end_headers()
         self.wfile.write(data)
+    def _workspace(self, section, query):
+        slug = section.lower().replace(" ", "-")
+        if section == "Settings":
+            slug = "settings"
+        pages = {
+            "overview": """<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>24</b><small>+4 since yesterday</small></article><article><small>EMAILS PROCESSED</small><b>86</b><small>96% automated</small></article><article><small>HUMAN REVIEW</small><b>5</b><small>3 due today</small></article><article><small>SETTLEMENTS DUE</small><b>9</b><small>RM 184,260 this week</small></article></div><div class='grid two'><section><h2>Today’s shipping workload</h2><table><tr><th>BOOKING</th><th>ROUTE</th><th>DEPARTURE</th><th>STATE</th></tr><tr><td>BK-48291</td><td>Port Klang → Rotterdam</td><td>24 Sep</td><td>Verified</td></tr><tr><td>BK-48307</td><td>Singapore → Hamburg</td><td>24 Sep</td><td>Review</td></tr><tr><td>BK-48318</td><td>Shanghai → Los Angeles</td><td>25 Sep</td><td>Verified</td></tr></table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Attention needed</h2><p><b>BL discrepancy — BK-48307</b></p><p>Container count differs between the shipping instruction and draft BOL.</p><a class='button' href='/app/verification-queue'>Review case</a></section></div>""",
+            "inbox-intelligence": """<section><h2>Incoming email</h2><p>Company messages arriving through the connected Gmail mailbox are classified here.</p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>New email input</h2><div class='email'><b>From:</b> dispatch@alpinecomponents.com<br><b>Subject:</b> Draft BOL for BK-48307 — action required<br><p>Attached draft BOL for the Singapore to Hamburg shipment. Please verify container count before release.</p><a class='button' href='/app/verification-queue'>Open verification case</a></div><div class='email'><b>From:</b> accounts@oceaniclines.com<br><b>Subject:</b> September freight invoice<br><p>Settlement request recorded for RM 68,400, due 24 Sep.</p><a href='/app/settlement-calendar'>View settlement</a></div><div class='email'><b>From:</b> promotions@unknown-sender.example<br><b>Subject:</b> Special rates for Q4</b><p><span class='pill'>Filtered as non-operational</span></p></div></section>""",
+            "shipment-operations": """<section><h2>Shipment operations</h2><p>Operational view for active bookings and their document state.</p><table><tr><th>BOOKING</th><th>CUSTOMER</th><th>ROUTE</th><th>DEPARTURE</th><th>BOL</th></tr><tr><td>BK-48291</td><td>Pacific Meridian</td><td>Port Klang → Rotterdam</td><td>24 Sep</td><td><a href='/bol/BL-2026-0918-8821.pdf' download>Download PDF</a></td></tr><tr><td>BK-48307</td><td>Alpine Components</td><td>Singapore → Hamburg</td><td>24 Sep</td><td><a href='/app/verification-queue'>Needs review</a></td></tr><tr><td>BK-48318</td><td>Northstar Retail</td><td>Shanghai → Los Angeles</td><td>25 Sep</td><td><a href='/bol/BL-2026-0918-8844.pdf' download>Download PDF</a></td></tr></table></section>""",
+            "verification-queue": """<section><h2>Verification queue</h2><p>Human review protects the audit trail when extracted shipping fields disagree.</p><div class='email'><h3>BK-48307 — Container count mismatch</h3><table><tr><th>FIELD</th><th>SHIPPING INSTRUCTION</th><th>DRAFT BOL</th></tr><tr><td>Container count</td><td>2 × 20GP</td><td class='alert'>3 × 20GP</td></tr><tr><td>Gross weight</td><td>18,450 kg</td><td>18,450 kg</td></tr></table><p><a class='button' href='/app/verification-queue?decision=correction'>Request carrier correction</a> <a class='button muted' href='/app/verification-queue?decision=approved'>Approve after review</a></p>""" + ("<p class='notice'>Decision recorded: " + ("carrier correction requested." if query.get("decision") == ["correction"] else "approved after manual verification.") + "</p>" if query.get("decision") else "") + "</div></section>",
+            "bill-of-lading-vault": """<section><h2>Audited BOL vault</h2><p>Select one or more verified BOLs, then download them together as a ZIP file.</p><form method='get' action='/bol/download'><table><tr><th>Select</th><th>BOL</th><th>Shipment</th><th>Audit state</th><th>Individual PDF</th></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8821'></td><td>BL-2026-0918-8821</td><td>BK-48291 · Pacific Meridian</td><td>Verified</td><td><a href='/bol/BL-2026-0918-8821.pdf' download>Download PDF</a></td></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8822'></td><td>BL-2026-0918-8822</td><td>BK-48307 · Alpine Components</td><td>Under review</td><td><a href='/bol/BL-2026-0918-8822.pdf' download>Download PDF</a></td></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8844'></td><td>BL-2026-0918-8844</td><td>BK-48318 · Northstar Retail</td><td>Verified</td><td><a href='/bol/BL-2026-0918-8844.pdf' download>Download PDF</a></td></tr></table><p><button>Download selected BOLs</button> <a class='button muted' href='/bol/download?bol=BL-2026-0918-8821&bol=BL-2026-0918-8822&bol=BL-2026-0918-8844'>Download all BOLs</a></p></form></section>""",
+            "settlement-calendar": """<section><h2>Settlement calendar</h2><p>Payments grouped by the expected settlement date.</p><table><tr><th>DATE</th><th>CARRIER</th><th>SHIPMENTS</th><th>AMOUNT</th><th>STATUS</th></tr><tr><td>24 Sep</td><td>Oceanic Lines</td><td>September freight invoice</td><td>RM 68,400</td><td>Due</td></tr><tr><td>25 Sep</td><td>Harbour Link</td><td>Three completed shipments</td><td>RM 74,860</td><td>Scheduled</td></tr><tr><td>27 Sep</td><td>Pacific Meridian</td><td>BK-48291</td><td>RM 40,000</td><td>Scheduled</td></tr></table></section>""",
+            "settings": """<section><h2>Company profile</h2><form method='get' action='/settings'><div class='formgrid'><label>Company name<input name='company' value='Avery Logistics'></label><label>Administrator email<input name='email' value='avery@averylogistics.com'></label><label>Preferred language<select name='language'><option>English</option><option>Bahasa Melayu</option><option>Chinese</option></select></label><label>Appearance<select name='theme'><option>Light mode</option><option>Dark mode</option></select></label></div><p><button>Save preferences</button></p></form></section><section><h2>Mailbox connection</h2><p>Gmail read-only access is """ + ("ready to connect." if os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET") else "not configured on this server.") + "</p><a class='button' href='/auth/gmail'>Connect Gmail account</a></section><section><h2>Account</h2><p>Role: Operations Administrator</p><p><a href='/logout'>Log out of CargoVeritas</a></p></section>""",
+        }
+        content = pages.get(slug, pages["overview"])
+        nav = [("overview", "▦ Overview"), ("inbox-intelligence", "✉ Inbox intelligence"), ("shipment-operations", "▱ Shipment operations"), ("verification-queue", "✓ Verification queue"), ("bill-of-lading-vault", "▣ Bill of Lading vault"), ("settlement-calendar", "◴ Settlement calendar")]
+        nav_html = "".join("<a class='active' href='/app/" + key + "'>" + label + "</a>" if key == slug else "<a href='/app/" + key + "'>" + label + "</a>" for key, label in nav)
+        return """<!doctype html><html><head><meta charset='utf-8'><title>CargoVeritas — """ + section + """</title><style>*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#10243f;font-family:'Times New Roman',Times,serif}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:#10243f;color:#d6e2ef;padding:30px 20px}.brand{color:#fff;font-size:26px;font-weight:bold;margin:0 12px 38px}.brand small{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;margin-top:5px}.side label{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;padding:0 12px 9px}nav a{display:block;color:#d6e2ef;padding:12px;text-decoration:none;border-radius:8px;margin:3px 0}nav a:hover,nav a.active{background:#204b7c;color:#fff}.navbottom{border-top:1px solid #36506c;margin-top:20px;padding-top:14px}.main{max-width:1280px;width:100%;padding:34px 46px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}.top h1{margin:0;font-size:32px}.top p{color:#657891}.button,button{display:inline-block;background:#1769e0;color:#fff;border:0;border-radius:7px;padding:10px 14px;text-decoration:none;font:inherit;cursor:pointer}.muted{background:#e8eef5;color:#254968}.grid{display:grid;gap:20px}.cards{grid-template-columns:repeat(4,1fr);margin-bottom:22px}.cards article,section{background:#fff;border:1px solid #e1e8ef;border-radius:12px;padding:22px}.cards small{display:block;color:#657891}.cards b{display:block;font-size:34px;margin:13px 0}.two{grid-template-columns:1.4fr .8fr}section{margin-bottom:20px}h2{margin-top:0}h3{margin-bottom:8px}p{color:#556b82;line-height:1.45}table{width:100%;border-collapse:collapse;margin:15px 0}th,td{text-align:left;padding:12px;border-bottom:1px solid #e1e8ef}th{font-size:12px;color:#63758a}.alert{color:#b4444d;font-weight:bold}.email{border-top:1px solid #e1e8ef;padding:17px 0}.email:first-of-type{border-top:0}.search{display:flex;gap:10px}.search input,.formgrid input,.formgrid select{padding:10px;border:1px solid #cfd9e4;border-radius:6px;font:inherit}.search input{flex:1}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.formgrid label{display:grid;gap:6px}.pill,.notice{display:inline-block;padding:5px 8px;background:#fff0d8;color:#9a5a00;border-radius:12px}.notice{background:#e2f6ee;color:#08745f}@media(max-width:850px){.shell{display:block}.side{padding:20px}.main{padding:24px 16px}.cards,.two,.formgrid{grid-template-columns:1fr}.top{align-items:flex-start;gap:12px;flex-direction:column}}</style></head><body><div class='shell'><aside class='side'><div class='brand'>⌁ CargoVeritas<small>CONTROL TOWER</small></div><label>WORKSPACE</label><nav>""" + nav_html + """<div class='navbottom'><a href='/settings'>⚙ Settings</a><a href='/logout'>⇥ Log out</a></div></nav></aside><main class='main'><header class='top'><div><h1>""" + section + """</h1><p>Company shipping workspace · Avery Logistics</p></div><a class='button' href='/auth/gmail'>Connect mailbox</a></header>""" + content + "</main></div></body></html>"
     def _html(self, message, status=200):
         page = ("<!doctype html><title>CargoVeritas</title>"
                 "<body style='font-family:Times New Roman,serif;padding:64px;max-width:720px'>"
