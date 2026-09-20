@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import os
 import secrets
+from datetime import datetime, timezone
+from html import escape
 from io import BytesIO
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
@@ -93,6 +95,16 @@ class App(BaseHTTPRequestHandler):
         if parsed.path == "/logout":
             self._html("<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Your local CargoVeritas session has ended.</p><p><a href='/'>Return to dashboard</a></p></main>")
             return
+        if parsed.path == "/gmail/sync":
+            try:
+                result = self._sync_gmail_to_supabase()
+                self._html("<h1>Gmail sync complete</h1><p>Processed " + str(result["processed"]) + " recent messages from <b>" + escape(result["account"]) + "</b> and saved them to Supabase.</p><p><a href='/app/inbox-intelligence'>Open live inbox</a></p>")
+            except RuntimeError as error:
+                self._html("<h1>Gmail sync needs setup</h1><p>" + escape(str(error)) + "</p><p><a href='/settings'>Open settings</a></p>", 400)
+            except Exception as error:
+                print("Gmail sync failed:", type(error).__name__, str(error))
+                self._html("<h1>Gmail sync failed</h1><p>The server could not retrieve or store mailbox messages. Check the local server console for the safe diagnostic.</p><p><a href='/app/inbox-intelligence'>Return to inbox</a></p>", 502)
+            return
         if parsed.path == "/bol/download":
             selected = parse_qs(parsed.query).get("bol", [])
             if not selected:
@@ -125,13 +137,61 @@ class App(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", "attachment; filename=" + attachment_name)
         self.end_headers()
         self.wfile.write(data)
+    def _supabase_credentials(self):
+        url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY")
+        if not url or not key:
+            raise RuntimeError("Add SUPABASE_SECRET_KEY to .env. Use the Supabase secret/service-role key, not the publishable key.")
+        return url.rstrip("/"), key
+
+    def _supabase_json(self, path, method="GET", payload=None):
+        url, key = self._supabase_credentials()
+        headers = {"apikey": key, "Authorization": "Bearer " + key}
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+            headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+        request = Request(url + path, data=data, headers=headers, method=method)
+        response = GOOGLE_HTTP.open(request, timeout=20)
+        raw = response.read()
+        return json.loads(raw) if raw else []
+
+    def _sync_gmail_to_supabase(self):
+        if not CONNECTED_ACCOUNTS:
+            raise RuntimeError("Connect a Gmail account first, then return here to sync it.")
+        account, token = next(iter(CONNECTED_ACCOUNTS.items()))
+        listing = json.load(GOOGLE_HTTP.open(Request(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&labelIds=INBOX",
+            headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
+        records = []
+        for item in listing.get("messages", []):
+            message = json.load(GOOGLE_HTTP.open(Request(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + item["id"] + "?format=metadata&metadataHeaders=From&metadataHeaders=Subject",
+                headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
+            headers = {h["name"].lower(): h["value"] for h in message.get("payload", {}).get("headers", [])}
+            subject = headers.get("subject", "(no subject)")
+            words = (subject + " " + message.get("snippet", "")).lower()
+            category = "settlement" if any(w in words for w in ("invoice", "payment", "settlement")) else "shipping" if any(w in words for w in ("bol", "bill of lading", "shipping", "container", "booking")) else "other"
+            received = datetime.fromtimestamp(int(message.get("internalDate", "0")) / 1000, tz=timezone.utc).isoformat()
+            records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "received_at": received, "classification": category, "processing_status": "processed", "extraction": {"source": "gmail_metadata", "category": category}})
+        if records:
+            self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records)
+        return {"account": account, "processed": len(records)}
+
+    def _recent_gmail_messages(self):
+        try:
+            return self._supabase_json("/rest/v1/gmail_messages?select=sender,subject,snippet,classification,received_at&order=received_at.desc&limit=10")
+        except Exception:
+            return []
     def _workspace(self, section, query):
         slug = section.lower().replace(" ", "-")
         if section == "Settings":
             slug = "settings"
+        inbox_rows = self._recent_gmail_messages()
+        live_messages = "".join("<div class='email'><b>From:</b> " + escape(row.get("sender") or "Unknown sender") + "<br><b>Subject:</b> " + escape(row.get("subject") or "(no subject)") + "<p>" + escape(row.get("snippet") or "No preview available.") + "</p><span class='pill'>" + escape(row.get("classification") or "other") + "</span></div>" for row in inbox_rows) or "<p>No synced Gmail messages yet. Connect Gmail, then select <b>Sync Gmail now</b>.</p>"
         pages = {
             "overview": """<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>24</b><small>+4 since yesterday</small></article><article><small>EMAILS PROCESSED</small><b>86</b><small>96% automated</small></article><article><small>HUMAN REVIEW</small><b>5</b><small>3 due today</small></article><article><small>SETTLEMENTS DUE</small><b>9</b><small>RM 184,260 this week</small></article></div><div class='grid two'><section><h2>Today’s shipping workload</h2><table><tr><th>BOOKING</th><th>ROUTE</th><th>DEPARTURE</th><th>STATE</th></tr><tr><td>BK-48291</td><td>Port Klang → Rotterdam</td><td>24 Sep</td><td>Verified</td></tr><tr><td>BK-48307</td><td>Singapore → Hamburg</td><td>24 Sep</td><td>Review</td></tr><tr><td>BK-48318</td><td>Shanghai → Los Angeles</td><td>25 Sep</td><td>Verified</td></tr></table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Attention needed</h2><p><b>BL discrepancy — BK-48307</b></p><p>Container count differs between the shipping instruction and draft BOL.</p><a class='button' href='/app/verification-queue'>Review case</a></section></div>""",
-            "inbox-intelligence": """<section><h2>Incoming email</h2><p>Company messages arriving through the connected Gmail mailbox are classified here.</p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>New email input</h2><div class='email'><b>From:</b> dispatch@alpinecomponents.com<br><b>Subject:</b> Draft BOL for BK-48307 — action required<br><p>Attached draft BOL for the Singapore to Hamburg shipment. Please verify container count before release.</p><a class='button' href='/app/verification-queue'>Open verification case</a></div><div class='email'><b>From:</b> accounts@oceaniclines.com<br><b>Subject:</b> September freight invoice<br><p>Settlement request recorded for RM 68,400, due 24 Sep.</p><a href='/app/settlement-calendar'>View settlement</a></div><div class='email'><b>From:</b> promotions@unknown-sender.example<br><b>Subject:</b> Special rates for Q4</b><p><span class='pill'>Filtered as non-operational</span></p></div></section>""",
+            "inbox-intelligence": """<section><h2>Incoming email</h2><p>Connect Gmail once, then use Sync Gmail now to bring the latest inbox metadata into Supabase for classification.</p><p><a class='button' href='/gmail/sync'>Sync Gmail now</a></p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>Live mailbox messages</h2>""" + live_messages + "</section>",
             "shipment-operations": """<section><h2>Shipment operations</h2><p>Operational view for active bookings and their document state.</p><table><tr><th>BOOKING</th><th>CUSTOMER</th><th>ROUTE</th><th>DEPARTURE</th><th>BOL</th></tr><tr><td>BK-48291</td><td>Pacific Meridian</td><td>Port Klang → Rotterdam</td><td>24 Sep</td><td><a href='/bol/BL-2026-0918-8821.pdf' download>Download PDF</a></td></tr><tr><td>BK-48307</td><td>Alpine Components</td><td>Singapore → Hamburg</td><td>24 Sep</td><td><a href='/app/verification-queue'>Needs review</a></td></tr><tr><td>BK-48318</td><td>Northstar Retail</td><td>Shanghai → Los Angeles</td><td>25 Sep</td><td><a href='/bol/BL-2026-0918-8844.pdf' download>Download PDF</a></td></tr></table></section>""",
             "verification-queue": """<section><h2>Verification queue</h2><p>Human review protects the audit trail when extracted shipping fields disagree.</p><div class='email'><h3>BK-48307 — Container count mismatch</h3><table><tr><th>FIELD</th><th>SHIPPING INSTRUCTION</th><th>DRAFT BOL</th></tr><tr><td>Container count</td><td>2 × 20GP</td><td class='alert'>3 × 20GP</td></tr><tr><td>Gross weight</td><td>18,450 kg</td><td>18,450 kg</td></tr></table><p><a class='button' href='/app/verification-queue?decision=correction'>Request carrier correction</a> <a class='button muted' href='/app/verification-queue?decision=approved'>Approve after review</a></p>""" + ("<p class='notice'>Decision recorded: " + ("carrier correction requested." if query.get("decision") == ["correction"] else "approved after manual verification.") + "</p>" if query.get("decision") else "") + "</div></section>",
             "bill-of-lading-vault": """<section><h2>Audited BOL vault</h2><p>Select one or more verified BOLs, then download them together as a ZIP file.</p><form method='get' action='/bol/download'><table><tr><th>Select</th><th>BOL</th><th>Shipment</th><th>Audit state</th><th>Individual PDF</th></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8821'></td><td>BL-2026-0918-8821</td><td>BK-48291 · Pacific Meridian</td><td>Verified</td><td><a href='/bol/BL-2026-0918-8821.pdf' download>Download PDF</a></td></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8822'></td><td>BL-2026-0918-8822</td><td>BK-48307 · Alpine Components</td><td>Under review</td><td><a href='/bol/BL-2026-0918-8822.pdf' download>Download PDF</a></td></tr><tr><td><input type='checkbox' name='bol' value='BL-2026-0918-8844'></td><td>BL-2026-0918-8844</td><td>BK-48318 · Northstar Retail</td><td>Verified</td><td><a href='/bol/BL-2026-0918-8844.pdf' download>Download PDF</a></td></tr></table><p><button>Download selected BOLs</button> <a class='button muted' href='/bol/download?bol=BL-2026-0918-8821&bol=BL-2026-0918-8822&bol=BL-2026-0918-8844'>Download all BOLs</a></p></form></section>""",
