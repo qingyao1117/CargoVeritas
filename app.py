@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import os
 import secrets
+import threading
+import time
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
@@ -30,6 +32,29 @@ CONNECTED_ACCOUNTS = {}
 # The local development runtime has a placeholder localhost proxy.  Google OAuth
 # must connect directly instead of inheriting that unusable proxy configuration.
 GOOGLE_HTTP = build_opener(ProxyHandler({}))
+SYNC_WORKER_STARTED = False
+SYNC_WORKER_LOCK = threading.Lock()
+
+
+def start_gmail_sync_worker():
+    """Poll the connected inbox while this local demo server is running."""
+    global SYNC_WORKER_STARTED
+    with SYNC_WORKER_LOCK:
+        if SYNC_WORKER_STARTED:
+            return
+        SYNC_WORKER_STARTED = True
+
+    def worker():
+        while True:
+            time.sleep(max(30, int(os.getenv("GMAIL_SYNC_INTERVAL_SECONDS", "60"))))
+            if not CONNECTED_ACCOUNTS or not os.getenv("SUPABASE_SECRET_KEY"):
+                continue
+            try:
+                GOOGLE_HTTP.open(Request("http://127.0.0.1:8000/gmail/sync"), timeout=30).read()
+            except Exception as error:
+                print("Background Gmail sync skipped:", type(error).__name__)
+
+    threading.Thread(target=worker, name="gmail-sync", daemon=True).start()
 
 
 def load_local_env():
@@ -86,6 +111,7 @@ class App(BaseHTTPRequestHandler):
                 token = json.load(GOOGLE_HTTP.open(Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})))
                 profile = json.load(GOOGLE_HTTP.open(Request("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": "Bearer " + token["access_token"]})))
                 CONNECTED_ACCOUNTS[profile["email"]] = token
+                start_gmail_sync_worker()
                 self._html("<h1>Gmail connected</h1><p><b>" + profile["email"] + "</b> is now connected with read-only Gmail access.</p><p><a href='/'>Return to CargoVeritas</a></p>")
             except Exception as error:
                 # Keep OAuth secrets out of the browser while preserving a useful local diagnostic.
