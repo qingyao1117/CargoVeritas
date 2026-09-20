@@ -1,3 +1,4 @@
+
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -99,13 +100,31 @@ def extract_fields_from_doc(text: str) -> dict:
     label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s+of\s+loading|load(?:ing)?\s+port|pol|port\s+of\s+discharge|discharge\s+port|pod|(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?|container\s+count|total\s+containers|(?:total\s+)?gross\s*(?:weight|wt)"
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
-    result["shipper"] = _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
-    result["consignee"] = _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
-    result["notify_party"] = _label_value(text, (r"notify(?:\s+party)?",))
-    result["port_of_loading"] = _label_value(text, (r"port\s+of\s+loading(?:\s*\(pol\))?", r"load(?:ing)?\s+port", r"pol"))
-    result["port_of_discharge"] = _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
-    containers = _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
-    weight = _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
+    def spreadsheet_field(key):
+        """Classify truncated/multilingual Column A labels from Excel exports."""
+        normalized = re.sub(r"[\s\.:;|\-]+$", "", key.strip().lower())
+        if normalized.startswith(("shipper", "pengirim", "\u53d1\u8d27")): return "shipper"
+        if normalized.startswith(("consignee", "penerima", "\u6536\u8d27")): return "consignee"
+        if normalized.startswith(("notify", "pihak dimaklumkan", "\u901a\u77e5")): return "notify_party"
+        if normalized.startswith(("load", "port of lo", "pol", "pelabuhan memuat", "\u88c5\u8d27")): return "port_of_loading"
+        if normalized.startswith(("discharge", "port of dis", "pod", "pelabuhan memunggah", "\u5378\u8d27")): return "port_of_discharge"
+        if normalized.startswith(("no. of c", "no of c", "container", "kontena", "\u7bb1\u6570")): return "container_count"
+        if normalized.startswith(("gross w", "g.w", "gw", "berat kasar", "\u6bdb\u91cd")): return "gross_weight_kg"
+        return None
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 2:
+            continue
+        field = spreadsheet_field(cells[0])
+        if field and cells[1]:
+            result[field] = " | ".join(cell for cell in cells[1:] if cell)
+    result["shipper"] = result["shipper"] or _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
+    result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
+    result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
+    result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s+of\s+loading(?:\s*\(pol\))?", r"load(?:ing)?\s+port", r"pol"))
+    result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
+    containers = result["container_count"] or _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
+    weight = result["gross_weight_kg"] or _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if containers:
         number = re.search(r"\d+", containers.replace(",", ""))
         result["container_count"] = int(number.group()) if number else None
