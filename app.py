@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 from main import FIELDS, extract_text_from_bytes, process_email
@@ -32,6 +32,7 @@ document.querySelectorAll("nav button").forEach(function(b){b.onclick=function()
 
 OAUTH_STATES = set()
 CONNECTED_ACCOUNTS = {}
+PREFERENCES = {"language": "English", "theme": "Light mode"}
 # The local development runtime has a placeholder localhost proxy.  Google OAuth
 # must connect directly instead of inheriting that unusable proxy configuration.
 GOOGLE_HTTP = build_opener(ProxyHandler({}))
@@ -124,6 +125,18 @@ class App(BaseHTTPRequestHandler):
         if parsed.path == "/logout":
             self._html("<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Your local CargoVeritas session has ended.</p><p><a href='/'>Return to dashboard</a></p></main>")
             return
+        if parsed.path == "/settings/save":
+            values = parse_qs(parsed.query)
+            language = values.get("language", [PREFERENCES["language"]])[0]
+            theme = values.get("theme", [PREFERENCES["theme"]])[0]
+            if language in ("English", "Bahasa Melayu", "Chinese"):
+                PREFERENCES["language"] = language
+            if theme in ("Light mode", "Dark mode"):
+                PREFERENCES["theme"] = theme
+            self.send_response(302)
+            self.send_header("Location", "/settings?saved=1")
+            self.end_headers()
+            return
         if parsed.path == "/gmail/sync":
             try:
                 result = self._sync_gmail_to_supabase()
@@ -154,15 +167,21 @@ class App(BaseHTTPRequestHandler):
             if not selected:
                 self._html("<h1>No BOLs selected</h1><p>Select one or more documents in the BOL vault first.</p><p><a href='/app/bill-of-lading-vault'>Open BOL vault</a></p>", 400)
                 return
-            source = Path("BL-2026-0918-8821.pdf").read_bytes()
             archive = BytesIO()
             with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
                 for bol in selected:
                     safe_name = bol.replace("/", "").replace("\\", "")
-                    bundle.writestr(safe_name + ".pdf", source)
+                    record = self._bol_record(safe_name)
+                    if record:
+                        bundle.writestr(safe_name + ".pdf", self._build_bol_pdf(record, safe_name))
             data, content_type, attachment_name = archive.getvalue(), "application/zip", "CargoVeritas-BOLs.zip"
         elif parsed.path.startswith("/bol/") and parsed.path.endswith(".pdf"):
-            data, content_type = Path("BL-2026-0918-8821.pdf").read_bytes(), "application/pdf"
+            bol_ref = unquote(parsed.path.rsplit("/", 1)[-1][:-4])
+            record = self._bol_record(bol_ref)
+            if not record:
+                self.send_error(404, "Bill of Lading record not found")
+                return
+            data, content_type = self._build_bol_pdf(record, bol_ref), "application/pdf"
         elif parsed.path in ("/", "/index.html", "/settings") or parsed.path.startswith("/app/"):
             section = parsed.path.rsplit("/", 1)[-1].replace("-", " ").title()
             if parsed.path in ("/", "/index.html"):
@@ -251,6 +270,57 @@ class App(BaseHTTPRequestHandler):
             self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records)
         return {"account": account, "processed": len(records)}
 
+    def _bol_record(self, bol_ref):
+        """Resolve a BOL reference to its current structured Gmail record."""
+        wanted = bol_ref.replace("BOL-", "")
+        return next((row for row in self._recent_gmail_messages()
+                     if (row.get("gmail_message_id") or "").endswith(wanted)
+                     and row.get("category") == "BL_COMPARISON"), None)
+
+    def _build_bol_pdf(self, record, bol_ref):
+        """Build a one-page audited PDF from the real-time extracted SI/BL fields."""
+        def clean(value):
+            return str(value if value not in (None, "") else "—").encode("latin-1", "replace").decode("latin-1")
+        def literal(value):
+            return clean(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        si, bl = record.get("si_data") or {}, record.get("bl_data") or {}
+        defects = set(record.get("defect_fields") or [])
+        labels = {"shipper": "Shipper", "consignee": "Consignee", "notify_party": "Notify Party", "port_of_loading": "Port of Loading", "port_of_discharge": "Port of Discharge", "container_count": "Container Count", "gross_weight_kg": "Gross Weight (kg)"}
+        lines = [
+            ("CargoVeritas — Audited Bill of Lading", 18),
+            ("Reference: " + bol_ref + "     Audit state: " + clean(record.get("status")), 10),
+            ("Source email: " + clean(record.get("sender")), 9),
+            ("Subject: " + clean(record.get("subject")), 9),
+            ("", 8),
+            ("Field                         Shipping Instruction (SI)              Draft Bill of Lading (BL)       Result", 9),
+        ]
+        for field in FIELDS:
+            outcome = "DISCREPANCY" if field in defects else "MATCH"
+            lines.append((f"{labels[field][:28]:28} {clean(si.get(field))[:31]:31} {clean(bl.get(field))[:31]:31} {outcome}", 8))
+        lines += [("", 8), ("Audit source: structured data extracted from the currently synced Gmail email and its attachments.", 8), ("Generated: " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), 8)]
+        commands, y = ["BT"], 790
+        for text, size in lines:
+            commands.extend([f"/F1 {size} Tf", f"1 0 0 1 50 {y} Tm ({literal(text)}) Tj"])
+            y -= 20 if size >= 16 else 15
+        commands.append("ET")
+        stream = "\n".join(commands).encode("latin-1", "replace")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        ]
+        pdf, offsets = bytearray(b"%PDF-1.4\n"), []
+        for number, obj in enumerate(objects, 1):
+            offsets.append(len(pdf))
+            pdf.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+        xref = len(pdf)
+        pdf.extend(b"xref\n0 6\n0000000000 65535 f \n")
+        pdf.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets))
+        pdf.extend(f"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+        return bytes(pdf)
+
     def _recent_gmail_messages(self):
         try:
             return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=15")
@@ -278,7 +348,18 @@ class App(BaseHTTPRequestHandler):
         def category_badge(row):
             label, subtitle, css = category_meta[category_for(row)]
             return "<span class='category-badge " + css + "'>" + label + "</span><small class='category-routing'>" + subtitle + "</small>"
-        live_messages = "".join("<div class='email'><b>From:</b> " + escape(row.get("sender") or "Unknown sender") + "<br><b>Subject:</b> " + escape(row.get("subject") or "(no subject)") + "<p>" + category_badge(row) + "<b>Routing:</b> " + escape(status_label(row.get("status"))) + "</p><p>" + escape(row.get("snippet") or "No preview available.") + "</p></div>" for row in inbox_rows) or "<p>No synced Gmail messages yet. Connect Gmail, then select <b>Sync Gmail now</b>.</p>"
+        selected_category = query.get("category", ["ALL"])[0]
+        if selected_category not in category_meta:
+            selected_category = "ALL"
+        search = query.get("q", [""])[0].strip().lower()
+        filtered_rows = [row for row in inbox_rows if (selected_category == "ALL" or category_for(row) == selected_category) and (not search or search in " ".join(str(row.get(key) or "") for key in ("sender", "subject", "snippet")).lower())]
+        def routing_reason(row):
+            return {"BL_COMPARISON": "Detected shipping-document content and routed it to the 7-field audit.", "SI_REQUEST": "Detected a shipping-instruction request and forwarded it to booking.", "INVOICE_QUERY": "Detected an invoice question and routed it to finance.", "GENERAL": "Detected an operational update that does not require document verification.", "SPAM": "Detected unsolicited promotional or irrelevant content and filtered it to quarantine."}[category_for(row)]
+        def inbox_row(row):
+            item_id = quote(row.get("gmail_message_id") or "", safe="")
+            href = "/app/inbox-intelligence?category=" + quote(selected_category) + "&email=" + item_id
+            return "<tr class='clickable-row' onclick=\"location.href='" + href + "'\"><td>" + escape(row.get("sender") or "Unknown sender") + "</td><td><b>" + escape(row.get("subject") or "(no subject)") + "</b></td><td>" + category_badge(row) + "</td><td>" + escape(status_label(row.get("status"))) + "</td><td>" + escape((row.get("received_at") or "")[:16].replace("T", " ")) + "</td></tr>"
+        live_messages = "<table><tr><th>FROM</th><th>SUBJECT</th><th>CATEGORY</th><th>ROUTING STATUS</th><th>RECEIVED</th></tr>" + "".join(inbox_row(row) for row in filtered_rows) + "</table>" if filtered_rows else "<p>No emails match this filter.</p>"
         shipping_rows = [row for row in inbox_rows if category_for(row) == "BL_COMPARISON"]
         review_rows = [row for row in inbox_rows if row.get("status") in ("MISMATCH", "NEEDS_REVIEW")]
         def shipment_row(row):
@@ -293,7 +374,7 @@ class App(BaseHTTPRequestHandler):
         straight_through = sum(1 for row in comparisons if row.get("status") == "OK")
         stp_rate = round((straight_through / len(comparisons) * 100) if comparisons else 0)
         overview_cards = "<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>" + str(len(shipping_rows)) + "</b><small>Bill of Lading comparisons</small></article><article><small>EMAILS PROCESSED</small><b>" + str(len(inbox_rows)) + "</b><small>matches category breakdown</small></article><article><small>HUMAN REVIEW</small><b>" + str(len(review_rows)) + "</b><small>documents awaiting a decision</small></article><article><small>STRAIGHT-THROUGH RATE</small><b>" + str(straight_through) + " / " + str(len(comparisons)) + "</b><small>" + str(stp_rate) + "% passed all 7 fields</small></article></div>"
-        category_breakdown = "<section><h2>Email Classification Breakdown</h2><div class='category-grid'>" + "".join("<div class='category-card " + category_meta[category][2] + "'><span class='category-badge " + category_meta[category][2] + "'>" + category_meta[category][0] + "</span><small>" + category_meta[category][1] + "</small><b>" + str(count) + "</b></div>" for category, count in category_counts.items()) + "</div></section>"
+        category_breakdown = "<section><h2>Email Classification Breakdown</h2><div class='category-grid'>" + "".join("<a class='category-card " + category_meta[category][2] + "' href='/app/inbox-intelligence?category=" + category + "'><span class='category-badge " + category_meta[category][2] + "'>" + category_meta[category][0] + "</span><small>" + category_meta[category][1] + "</small><b>" + str(count) + "</b></a>" for category, count in category_counts.items()) + "</div></section>"
         def review_card(row):
             item_id = quote(row.get("gmail_message_id") or "", safe="")
             actions = "<p><a class='button' href='/review/resolve?id=" + item_id + "&decision=approved'>Approve Discrepancy</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=rejected_to_carrier'>Reject to Carrier</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=amended_docs_requested'>Request Amended Docs</a></p>"
@@ -303,18 +384,32 @@ class App(BaseHTTPRequestHandler):
             rows = "".join("<tr" + (" class='alert'" if field in (row.get("defect_fields") or []) else "") + "><td>" + field_labels[field] + "</td><td>" + escape(str((row.get("si_data") or {}).get(field) or "—")) + "</td><td>" + escape(str((row.get("bl_data") or {}).get(field) or "—")) + "</td><td>" + ("<span class='discrepancy-badge'>Discrepancy Detected</span>" if field in (row.get("defect_fields") or []) else "<span class='match-badge'>Match</span>") + "</td></tr>" for field in FIELDS)
             return "<div class='email'><h3>" + escape(row.get("subject") or "BL comparison") + "</h3><table><tr><th>Field Name</th><th>Shipping Instruction (SI)</th><th>Draft Bill of Lading (BL)</th><th>Status</th></tr>" + rows + "</table>" + actions + "</div>"
         review_cards = "".join(review_card(row) for row in review_rows) or "<p>No MISMATCH or NEEDS_REVIEW records are awaiting action.</p>"
+        tab_specs = [("ALL", "All")] + [(category, category_meta[category][0]) for category in category_meta]
+        filter_tabs = "<div class='filter-tabs'>" + "".join("<a class='filter-pill" + (" active" if selected_category == key else "") + "' href='/app/inbox-intelligence?category=" + key + "'>" + label + " (" + str(len(inbox_rows) if key == "ALL" else category_counts[key]) + ")</a>" for key, label in tab_specs) + "</div>"
+        selected_email = query.get("email", [""])[0]
+        inspected = next((row for row in inbox_rows if row.get("gmail_message_id") == selected_email), None)
+        email_drawer = ""
+        if inspected:
+            close_url = "/app/inbox-intelligence?category=" + quote(selected_category)
+            email_drawer = "<div class='drawer-backdrop'><aside class='email-drawer'><a class='drawer-close' href='" + close_url + "'>×</a><h2>Email inspection</h2><p><b>From:</b> " + escape(inspected.get("sender") or "Unknown sender") + "</p><p><b>Subject:</b> " + escape(inspected.get("subject") or "(no subject)") + "</p><p><b>Timestamp:</b> " + escape((inspected.get("received_at") or "").replace("T", " ")) + "</p><p>" + category_badge(inspected) + "</p><div class='routing-explainer'><b>Automated routing rationale</b><br>" + routing_reason(inspected) + "</div><h3>Full email body</h3><pre>" + escape(inspected.get("body_snippet") or inspected.get("snippet") or "No body content was available.") + "</pre></aside></div>"
+        language_options = "".join("<option" + (" selected" if PREFERENCES["language"] == value else "") + ">" + value + "</option>" for value in ("English", "Bahasa Melayu", "Chinese"))
+        theme_options = "".join("<option" + (" selected" if PREFERENCES["theme"] == value else "") + ">" + value + "</option>" for value in ("Light mode", "Dark mode"))
+        save_confirmation = "<p class='notice'>Preferences saved. Language: " + escape(PREFERENCES["language"]) + "; appearance: " + escape(PREFERENCES["theme"]) + ".</p>" if query.get("saved") else ""
         pages = {
             "overview": overview_cards + category_breakdown + "<div class='grid two'><section><h2>Live shipping workload</h2><table><tr><th>BOOKING / BL REF</th><th>SHIPPER</th><th>CONSIGNEE</th><th>PORT OF LOADING</th><th>PORT OF DISCHARGE</th><th>CONTAINERS</th><th>GROSS WT (KG)</th><th>AUDIT STATE</th></tr>" + shipment_table + "</table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Live processing</h2><p>Records refresh after Gmail sync. Use Inbox intelligence to run an immediate sync.</p><a class='button' href='/app/inbox-intelligence'>Open inbox</a></section></div>",
-            "inbox-intelligence": """<section><h2>Incoming email</h2><p>Connect Gmail once, then use Sync Gmail now to bring the latest inbox metadata into Supabase for classification.</p><p><a class='button' href='/gmail/sync'>Sync Gmail now</a></p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>Live mailbox messages</h2>""" + live_messages + "</section>",
+            "inbox-intelligence": """<section><h2>Incoming email</h2><p>Classified Gmail messages. Select a category or click a row to inspect the original email and automated routing rationale.</p><p><a class='button' href='/gmail/sync'>Sync Gmail now</a></p><form method='get' action='/app/inbox-intelligence' class='search'><input type='hidden' name='category' value='""" + selected_category + """'><input name='q' value='""" + escape(query.get("q", [""])[0]) + """' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>Live mailbox messages</h2>""" + filter_tabs + live_messages + "</section>" + email_drawer,
             "shipment-operations": "<section><h2>Shipment operations</h2><p>Extracted shipping parameters from processed Gmail messages. Non-comparison messages intentionally show an em dash.</p><table><tr><th>BOOKING / BL REF</th><th>SHIPPER</th><th>CONSIGNEE</th><th>PORT OF LOADING</th><th>PORT OF DISCHARGE</th><th>CONTAINERS</th><th>GROSS WT (KG)</th><th>AUDIT STATE</th></tr>" + shipment_table + "</table></section>",
             "verification-queue": "<section><h2>Verification queue</h2><p>Live shipping documents awaiting a human decision. A decision is written back to Supabase and removed from this queue.</p>" + review_cards + "</section>",
             "bill-of-lading-vault": "<section><h2>Audited BOL vault</h2><p>Generated from synced shipping emails. Select one or more BOL records to download.</p><form method='get' action='/bol/download'><table><tr><th>Select</th><th>BOL</th><th>Shipment email</th><th>Audit state</th><th>Individual PDF</th></tr>" + bol_table + "</table><p><button>Download selected BOLs</button></p></form></section>",
-            "settings": """<section><h2>Company profile</h2><form method='get' action='/settings'><div class='formgrid'><label>Company name<input name='company' value='Avery Logistics'></label><label>Administrator email<input name='email' value='avery@averylogistics.com'></label><label>Preferred language<select name='language'><option>English</option><option>Bahasa Melayu</option><option>Chinese</option></select></label><label>Appearance<select name='theme'><option>Light mode</option><option>Dark mode</option></select></label></div><p><button>Save preferences</button></p></form></section><section><h2>Mailbox connection</h2><p>Gmail read-only access is """ + ("ready to connect." if os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET") else "not configured on this server.") + "</p><a class='button' href='/auth/gmail'>Connect Gmail account</a></section><section><h2>Account</h2><p>Role: Operations Administrator</p><p><a href='/logout'>Log out of CargoVeritas</a></p></section>""",
+            "settings": """<section><h2>Company profile</h2>""" + save_confirmation + """<form method='get' action='/settings/save'><div class='formgrid'><label>Company name<input name='company' value='Avery Logistics'></label><label>Administrator email<input name='email' value='avery@averylogistics.com'></label><label>Preferred language<select name='language'>""" + language_options + """</select></label><label>Appearance<select name='theme'>""" + theme_options + """</select></label></div><p><button>Save preferences</button></p></form></section><section><h2>Mailbox connection</h2><p>Gmail read-only access is """ + ("ready to connect." if os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET") else "not configured on this server.") + "</p><a class='button' href='/auth/gmail'>Connect Gmail account</a></section><section><h2>Account</h2><p>Role: Operations Administrator</p><p><a href='/logout'>Log out of CargoVeritas</a></p></section>""",
         }
         content = pages.get(slug, pages["overview"])
-        nav = [("overview", "▦ Overview"), ("inbox-intelligence", "✉ Inbox intelligence"), ("shipment-operations", "▱ Shipment operations"), ("verification-queue", "✓ Verification queue"), ("bill-of-lading-vault", "▣ Bill of Lading vault")]
+        locale = {"Bahasa Melayu": {"Overview": "Gambaran Keseluruhan", "Inbox intelligence": "Kecerdasan Peti Masuk", "Shipment operations": "Operasi Penghantaran", "Verification queue": "Barisan Pengesahan", "Bill Of Lading Vault": "Arkib Bil Muatan", "Settings": "Tetapan"}, "Chinese": {"Overview": "概览", "Inbox intelligence": "收件箱智能", "Shipment operations": "运输作业", "Verification queue": "核验队列", "Bill Of Lading Vault": "提单档案库", "Settings": "设置"}}.get(PREFERENCES["language"], {})
+        display_section = locale.get(section, section)
+        nav = [("overview", "▦ " + locale.get("Overview", "Overview")), ("inbox-intelligence", "✉ " + locale.get("Inbox intelligence", "Inbox intelligence")), ("shipment-operations", "▱ " + locale.get("Shipment operations", "Shipment operations")), ("verification-queue", "✓ " + locale.get("Verification queue", "Verification queue")), ("bill-of-lading-vault", "▣ " + locale.get("Bill Of Lading Vault", "Bill of Lading vault"))]
         nav_html = "".join("<a class='active' href='/app/" + key + "'>" + label + "</a>" if key == slug else "<a href='/app/" + key + "'>" + label + "</a>" for key, label in nav)
-        return """<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='60'><title>CargoVeritas — """ + section + """</title><style>*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#10243f;font-family:'Times New Roman',Times,serif}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:#10243f;color:#d6e2ef;padding:30px 20px}.brand{color:#fff;font-size:26px;font-weight:bold;margin:0 12px 38px}.brand small{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;margin-top:5px}.side label{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;padding:0 12px 9px}nav a{display:block;color:#d6e2ef;padding:12px;text-decoration:none;border-radius:8px;margin:3px 0}nav a:hover,nav a.active{background:#204b7c;color:#fff}.navbottom{border-top:1px solid #36506c;margin-top:20px;padding-top:14px}.main{max-width:1280px;width:100%;padding:34px 46px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}.top h1{margin:0;font-size:32px}.top p{color:#657891}.button,button{display:inline-block;background:#1769e0;color:#fff;border:0;border-radius:7px;padding:10px 14px;text-decoration:none;font:inherit;cursor:pointer}.muted{background:#e8eef5;color:#254968}.grid{display:grid;gap:20px}.cards{grid-template-columns:repeat(4,1fr);margin-bottom:22px}.cards article,section{background:#fff;border:1px solid #e1e8ef;border-radius:12px;padding:22px}.cards small{display:block;color:#657891}.cards b{display:block;font-size:34px;margin:13px 0}.two{grid-template-columns:1.4fr .8fr}section{margin-bottom:20px}h2{margin-top:0}h3{margin-bottom:8px}p{color:#556b82;line-height:1.45}table{width:100%;border-collapse:collapse;margin:15px 0;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid #e1e8ef}th{font-size:12px;color:#63758a}.email{border-top:1px solid #e1e8ef;padding:17px 0}.email:first-of-type{border-top:0}.search{display:flex;gap:10px}.search input,.formgrid input,.formgrid select{padding:10px;border:1px solid #cfd9e4;border-radius:6px;font:inherit}.search input{flex:1}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.formgrid label{display:grid;gap:6px}.category-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.category-card{border:1px solid #e1e8ef;border-radius:9px;padding:14px}.category-card small{display:block;margin-top:9px;color:#63758a;min-height:32px}.category-card b{display:block;font-size:28px;margin-top:7px}.category-badge{display:inline-block;padding:5px 8px;border:1px solid;border-radius:12px;font-size:12px;font-weight:bold}.category-routing{display:inline-block;margin:0 14px 0 7px;color:#63758a}.cat-bl{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}.cat-si{background:#f5f3ff;color:#6d28d9;border-color:#ddd6fe}.cat-invoice{background:#fffbeb;color:#b45309;border-color:#fde68a}.cat-general{background:#f1f5f9;color:#475569;border-color:#cbd5e1}.cat-spam{background:#fef2f2;color:#b91c1c;border-color:#fecaca}.alert td{background:#fef2f2;color:#b91c1c;font-weight:bold}.discrepancy-badge,.match-badge{display:inline-block;padding:4px 7px;border-radius:11px;font-size:12px}.discrepancy-badge{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca}.match-badge{background:#e2f6ee;color:#08745f;border:1px solid #b7e4d6}.warning-banner{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:7px;padding:11px;margin:10px 0}.pill,.notice{display:inline-block;padding:5px 8px;background:#fff0d8;color:#9a5a00;border-radius:12px}.notice{background:#e2f6ee;color:#08745f}@media(max-width:1000px){.category-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:850px){.shell{display:block}.side{padding:20px}.main{padding:24px 16px;overflow-x:auto}.cards,.two,.formgrid{grid-template-columns:1fr}.top{align-items:flex-start;gap:12px;flex-direction:column}.category-grid{grid-template-columns:1fr}}</style></head><body><div class='shell'><aside class='side'><div class='brand'>⌁ CargoVeritas<small>CONTROL TOWER</small></div><label>WORKSPACE</label><nav>""" + nav_html + """<div class='navbottom'><a href='/settings'>⚙ Settings</a><a href='/logout'>⇥ Log out</a></div></nav></aside><main class='main'><header class='top'><div><h1>""" + section + """</h1><p>Company shipping workspace · Avery Logistics</p></div><a class='button' href='/auth/gmail'>Connect mailbox</a></header>""" + content + "</main></div></body></html>"
+        dark_css = "body{background:#101827;color:#e5edf7}.main{background:#101827}.cards article,section{background:#182335;border-color:#334155}.top p,p,.cards small,th,.category-card small{color:#a9bbcf}td{border-color:#334155;color:#d5deea}.email{border-color:#334155}.search input,.formgrid input,.formgrid select{background:#0f1725;color:#e5edf7;border-color:#475569}.drawer-backdrop{background:rgba(0,0,0,.6)}" if PREFERENCES["theme"] == "Dark mode" else ""
+        return """<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='refresh' content='60'><title>CargoVeritas — """ + display_section + """</title><style>*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#10243f;font-family:'Times New Roman',Times,serif}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:#10243f;color:#d6e2ef;padding:30px 20px}.brand{color:#fff;font-size:26px;font-weight:bold;margin:0 12px 38px}.brand small{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;margin-top:5px}.side label{display:block;color:#99b0c7;font-size:11px;letter-spacing:1px;padding:0 12px 9px}nav a{display:block;color:#d6e2ef;padding:12px;text-decoration:none;border-radius:8px;margin:3px 0}nav a:hover,nav a.active{background:#204b7c;color:#fff}.navbottom{border-top:1px solid #36506c;margin-top:20px;padding-top:14px}.main{max-width:1280px;width:100%;padding:34px 46px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}.top h1{margin:0;font-size:32px}.top p{color:#657891}.button,button{display:inline-block;background:#1769e0;color:#fff;border:0;border-radius:7px;padding:10px 14px;text-decoration:none;font:inherit;cursor:pointer}.muted{background:#e8eef5;color:#254968}.grid{display:grid;gap:20px}.cards{grid-template-columns:repeat(4,1fr);margin-bottom:22px}.cards article,section{background:#fff;border:1px solid #e1e8ef;border-radius:12px;padding:22px}.cards small{display:block;color:#657891}.cards b{display:block;font-size:34px;margin:13px 0}.two{grid-template-columns:1.4fr .8fr}section{margin-bottom:20px}h2{margin-top:0}h3{margin-bottom:8px}p{color:#556b82;line-height:1.45}table{width:100%;border-collapse:collapse;margin:15px 0;font-size:14px}th,td{text-align:left;padding:12px;border-bottom:1px solid #e1e8ef}th{font-size:12px;color:#63758a}.clickable-row{cursor:pointer}.clickable-row:hover td{background:#f1f5f9}.email{border-top:1px solid #e1e8ef;padding:17px 0}.email:first-of-type{border-top:0}.search{display:flex;gap:10px}.search input,.formgrid input,.formgrid select{padding:10px;border:1px solid #cfd9e4;border-radius:6px;font:inherit}.search input{flex:1}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.formgrid label{display:grid;gap:6px}.category-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.category-card{border:1px solid #e1e8ef;border-radius:9px;padding:14px;text-decoration:none}.category-card small{display:block;margin-top:9px;color:#63758a;min-height:32px}.category-card b{display:block;font-size:28px;margin-top:7px}.category-badge{display:inline-block;padding:5px 8px;border:1px solid;border-radius:12px;font-size:12px;font-weight:bold}.category-routing{display:inline-block;margin:0 14px 0 7px;color:#63758a}.cat-bl{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}.cat-si{background:#f5f3ff;color:#6d28d9;border-color:#ddd6fe}.cat-invoice{background:#fffbeb;color:#b45309;border-color:#fde68a}.cat-general{background:#f1f5f9;color:#475569;border-color:#cbd5e1}.cat-spam{background:#fef2f2;color:#b91c1c;border-color:#fecaca}.filter-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.filter-pill{border:1px solid #cbd5e1;border-radius:16px;padding:7px 10px;text-decoration:none;color:#475569;font-size:13px}.filter-pill.active{background:#1769e0;color:#fff;border-color:#1769e0}.alert td{background:#fef2f2;color:#b91c1c;font-weight:bold}.discrepancy-badge,.match-badge{display:inline-block;padding:4px 7px;border-radius:11px;font-size:12px}.discrepancy-badge{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca}.match-badge{background:#e2f6ee;color:#08745f;border:1px solid #b7e4d6}.warning-banner{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:7px;padding:11px;margin:10px 0}.pill,.notice{display:inline-block;padding:5px 8px;background:#fff0d8;color:#9a5a00;border-radius:12px}.notice{background:#e2f6ee;color:#08745f}.drawer-backdrop{position:fixed;inset:0;background:rgba(16,36,63,.45);z-index:10}.email-drawer{position:absolute;right:0;top:0;width:min(520px,94vw);height:100%;overflow:auto;background:#fff;padding:30px;box-shadow:-8px 0 30px rgba(0,0,0,.2)}.drawer-close{float:right;font-size:28px;text-decoration:none;color:#10243f}.routing-explainer{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px;line-height:1.45}.email-drawer pre{white-space:pre-wrap;font:inherit;line-height:1.5;background:#f8fafc;border:1px solid #e1e8ef;padding:12px;border-radius:8px}""" + dark_css + """@media(max-width:1000px){.category-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:850px){.shell{display:block}.side{padding:20px}.main{padding:24px 16px;overflow-x:auto}.cards,.two,.formgrid{grid-template-columns:1fr}.top{align-items:flex-start;gap:12px;flex-direction:column}.category-grid{grid-template-columns:1fr}}</style></head><body><div class='shell'><aside class='side'><div class='brand'>⌁ CargoVeritas<small>CONTROL TOWER</small></div><label>WORKSPACE</label><nav>""" + nav_html + """<div class='navbottom'><a href='/settings'>⚙ Settings</a><a href='/logout'>⇥ Log out</a></div></nav></aside><main class='main'><header class='top'><div><h1>""" + display_section + """</h1><p>Company shipping workspace · Avery Logistics</p></div><a class='button' href='/auth/gmail'>Connect mailbox</a></header>""" + content + "</main></div></body></html>"
     def _html(self, message, status=200):
         page = ("<!doctype html><title>CargoVeritas</title>"
                 "<body style='font-family:Times New Roman,serif;padding:64px;max-width:720px'>"
