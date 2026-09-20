@@ -1,4 +1,3 @@
-
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -101,7 +100,7 @@ def extract_fields_from_doc(text: str) -> dict:
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
     def spreadsheet_field(key):
-        """Classify truncated/multilingual Column A labels from Excel exports."""
+        """Classify truncated/multilingual labels from any extracted document."""
         normalized = re.sub(r"[\s\.:;|\-]+$", "", key.strip().lower())
         if normalized.startswith(("shipper", "pengirim", "\u53d1\u8d27")): return "shipper"
         if normalized.startswith(("consignee", "penerima", "\u6536\u8d27")): return "consignee"
@@ -112,7 +111,12 @@ def extract_fields_from_doc(text: str) -> dict:
         if normalized.startswith(("gross w", "g.w", "gw", "berat kasar", "\u6bdb\u91cd")): return "gross_weight_kg"
         return None
     for line in text.splitlines():
-        cells = [cell.strip() for cell in line.split("|")]
+        # Excel/Word tables are normally pipe-delimited, while PDFs and plain
+        # text often retain their columns as tabs or two-or-more spaces.
+        cells = [cell.strip() for cell in re.split(r"\s*\|\s*|\t+", line)]
+        if len(cells) < 2:
+            spaced = re.match(r"^\s*(.+?)(?:\s{2,})(.+?)\s*$", line)
+            cells = [spaced.group(1).strip(), spaced.group(2).strip()] if spaced else cells
         if len(cells) < 2:
             continue
         field = spreadsheet_field(cells[0])
