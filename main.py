@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import zipfile
 from pathlib import Path
 
 from loader import Inbox
@@ -40,7 +41,8 @@ def extract_text_from_bytes(raw: bytes, filename: str) -> str:
                 return raw.decode("latin-1", errors="ignore")
         if suffix == ".pdf":
             from pypdf import PdfReader
-            return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(raw)).pages).strip()
+            reader = PdfReader(io.BytesIO(raw), strict=False)
+            return "\n".join(page.extract_text(extraction_mode="layout") or page.extract_text() or "" for page in reader.pages).strip()
         if suffix in (".docx", ".doc"):
             import docx
             doc = docx.Document(io.BytesIO(raw))
@@ -62,15 +64,30 @@ def extract_text_from_bytes(raw: bytes, filename: str) -> str:
                         rows.append(" | ".join(cells))
             return "\n".join(rows).strip()
     except Exception:
+        # DOCX and XLSX are ZIP-based XML. This fallback still recovers text
+        # when an office library rejects a slightly malformed export.
+        if suffix in (".docx", ".xlsx"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                    names = archive.namelist()
+                    xml_files = (["word/document.xml"] if suffix == ".docx" else [name for name in names if name.startswith("xl/sharedStrings") or name.startswith("xl/worksheets/")])
+                    parts = []
+                    for name in xml_files:
+                        if name in names:
+                            xml = archive.read(name).decode("utf-8", errors="ignore")
+                            parts.append(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", xml)))
+                    return "\n".join(part.strip() for part in parts if part.strip())
+            except Exception:
+                pass
         return ""
     return ""
 
 
 def _label_value(text: str, labels) -> str | None:
     for label in labels:
-        match = re.search(r"(?im)^\s*" + label + r"\s*[:\-]\s*(.+?)\s*$", text)
+        match = re.search(r"(?im)^\s*" + label + r"\s*(?::|\-|\|)\s*(.+?)\s*$", text)
         if match:
-            return match.group(1).strip()
+            return match.group(1).strip(" |\t")
     return None
 
 
