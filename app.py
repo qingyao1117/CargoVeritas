@@ -82,8 +82,10 @@ class App(BaseHTTPRequestHandler):
                 profile = json.load(urlopen(Request("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": "Bearer " + token["access_token"]})))
                 CONNECTED_ACCOUNTS[profile["email"]] = token
                 self._html("<h1>Gmail connected</h1><p><b>" + profile["email"] + "</b> is now connected with read-only Gmail access.</p><p><a href='/'>Return to CargoVeritas</a></p>")
-            except Exception:
-                self._html("<h1>Gmail connection failed</h1><p>Check the OAuth redirect URI, Gmail API, and server credentials, then try again.</p>", 502)
+            except Exception as error:
+                # Keep OAuth secrets out of the browser while preserving a useful local diagnostic.
+                print("Gmail OAuth callback failed:", type(error).__name__, str(error))
+                self._html("<h1>Gmail connection failed</h1><p>Google approved the account, but CargoVeritas could not exchange the authorization with Google. Check the local server console for the safe diagnostic, then try a fresh connection.</p>", 502)
             return
         if parsed.path == "/logout":
             self._html("<main style='padding:80px;font-family:Times New Roman,serif'><h1>You have been logged out</h1><p>Your local CargoVeritas session has ended.</p><p><a href='/'>Return to dashboard</a></p></main>")
