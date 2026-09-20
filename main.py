@@ -1,3 +1,4 @@
+
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -29,22 +30,37 @@ def classify_email(subject: str, body: str, attachment_names=()) -> str:
 
 
 def extract_text_from_bytes(raw: bytes, filename: str) -> str:
-    """Read TXT/PDF/DOCX/XLSX attachments; return empty text when unreadable."""
+    """Extract readable content from common logistics attachment formats."""
     suffix = Path(filename).suffix.lower()
     try:
         if suffix in (".txt", ".csv"):
-            return raw.decode("utf-8", errors="replace")
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw.decode("latin-1", errors="ignore")
         if suffix == ".pdf":
             from pypdf import PdfReader
-            return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(raw)).pages)
-        if suffix == ".docx":
+            return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(raw)).pages).strip()
+        if suffix in (".docx", ".doc"):
             import docx
             doc = docx.Document(io.BytesIO(raw))
-            return "\n".join([p.text for p in doc.paragraphs] + [" | ".join(c.text for c in row.cells) for table in doc.tables for row in table.rows])
-        if suffix == ".xlsx":
+            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        paragraphs.append(" | ".join(cells))
+            return "\n".join(paragraphs).strip()
+        if suffix in (".xlsx", ".xls"):
             import openpyxl
             book = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
-            return "\n".join(" | ".join(str(v) for v in row if v is not None) for sheet in book.worksheets for row in sheet.iter_rows(values_only=True))
+            rows = []
+            for sheet in book.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(value).strip() for value in row if value is not None and str(value).strip()]
+                    if cells:
+                        rows.append(" | ".join(cells))
+            return "\n".join(rows).strip()
     except Exception:
         return ""
     return ""
