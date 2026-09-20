@@ -282,15 +282,15 @@ class App(BaseHTTPRequestHandler):
         def clean(value):
             if value in (None, ""):
                 return "N/A"
-            replacements = {"-": "-", "-": "-", "'": "'", "'": "'", '"': '"', '"': '"', "...": "...", "\u00a0": " "}
+            replacements = {chr(0x2014): "-", chr(0x2013): "-", chr(0x2018): "'", chr(0x2019): "'", chr(0x201C): '"', chr(0x201D): '"', chr(0x2026): "...", chr(0x00A0): " "}
             text = str(value)
             for source, replacement in replacements.items():
                 text = text.replace(source, replacement)
             return text.encode("ascii", "ignore").decode("ascii").strip() or "N/A"
         def literal(value):
             return clean(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        def text(cmds, x, y, value, size=9, color="0.06 0.09 0.16"):
-            cmds.extend([color + " rg", f"/F1 {size} Tf", f"1 0 0 1 {x} {y} Tm (" + literal(value) + ") Tj"])
+        def text(cmds, x, y, value, size=9, color="0.06 0.09 0.16", bold=False):
+            cmds.extend([color + " rg", f"/F{'2' if bold else '1'} {size} Tf", f"1 0 0 1 {x} {y} Tm (" + literal(value) + ") Tj"])
         def rect(cmds, x, y, width, height, color):
             cmds.append(color + f" rg {x} {y} {width} {height} re f")
         def clipped(value, length):
@@ -303,11 +303,11 @@ class App(BaseHTTPRequestHandler):
         state_text, state_color = state_map.get(record.get("status"), ("HUMAN REVIEW REQUIRED", "0.843 0.467 0.024"))
         commands = []
         rect(commands, 0, 700, 612, 142, "0.059 0.090 0.165")
-        text(commands, 34, 802, "CARGOVERITAS AUDIT VERIFICATION CERTIFICATE", 18, "1 1 1")
+        text(commands, 34, 802, "CARGOVERITAS AUDIT VERIFICATION CERTIFICATE", 18, "1 1 1", True)
         text(commands, 34, 778, "CargoVeritas - Audited Bill of Lading", 10, "0.85 0.90 0.97")
-        text(commands, 34, 748, "Audit Reference: " + bol_ref, 9, "1 1 1")
+        text(commands, 34, 748, "Audit Reference: " + bol_ref, 9, "1 1 1", True)
         rect(commands, 334, 735, 238, 24, state_color)
-        text(commands, 344, 744, state_text, 8, "1 1 1")
+        text(commands, 344, 744, state_text, 8, "1 1 1", True)
         text(commands, 34, 725, "Source Email: " + clipped(record.get("sender"), 69), 8, "0.85 0.90 0.97")
         text(commands, 34, 710, "Subject: " + clipped(record.get("subject"), 77), 8, "0.85 0.90 0.97")
         text(commands, 34, 692, "Timestamp (UTC): " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), 8, "0.85 0.90 0.97")
@@ -316,7 +316,7 @@ class App(BaseHTTPRequestHandler):
         headers = ("Field", "Shipping Instruction (SI)", "Draft Bill of Lading (BL)", "Audit Result")
         cursor = x
         for header, width in zip(headers, widths):
-            text(commands, cursor + 6, y + 10, header, 8, "1 1 1")
+            text(commands, cursor + 6, y + 10, header, 8, "1 1 1", True)
             cursor += width
         for index, field in enumerate(FIELDS):
             row_y = y - (index + 1) * row_height
@@ -332,9 +332,9 @@ class App(BaseHTTPRequestHandler):
                 cursor += width
             if outcome == "MISMATCH":
                 rect(commands, cursor + 6, row_y + 9, 92, 17, "0.937 0.267 0.267")
-                text(commands, cursor + 12, row_y + 14, outcome, 7, "1 1 1")
+                text(commands, cursor + 12, row_y + 14, outcome, 7, "1 1 1", True)
             elif outcome == "MATCH":
-                text(commands, cursor + 8, row_y + 13, outcome, 8, "0.086 0.639 0.290")
+                text(commands, cursor + 8, row_y + 13, outcome, 8, "0.086 0.639 0.290", True)
             else:
                 text(commands, cursor + 8, row_y + 13, "N/A - UNEXTRACTED", 7, "0.392 0.455 0.545")
             cursor = x
@@ -349,8 +349,9 @@ class App(BaseHTTPRequestHandler):
         objects = [
             b"<< /Type /Catalog /Pages 2 0 R >>",
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>",
             b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
             b"<< /Title (CargoVeritas - Audited Bill of Lading) /Author (CargoVeritas) >>",
         ]
@@ -359,9 +360,9 @@ class App(BaseHTTPRequestHandler):
             offsets.append(len(pdf))
             pdf.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
         xref = len(pdf)
-        pdf.extend(b"xref\n0 7\n0000000000 65535 f \n")
+        pdf.extend(b"xref\n0 8\n0000000000 65535 f \n")
         pdf.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets))
-        pdf.extend(f"trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+        pdf.extend(f"trailer\n<< /Size 8 /Root 1 0 R /Info 7 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
         return bytes(pdf)
 
     def _recent_gmail_messages(self):
