@@ -222,7 +222,7 @@ class App(BaseHTTPRequestHandler):
             raise RuntimeError("Connect a Gmail account first, then return here to sync it.")
         account, token = next(iter(CONNECTED_ACCOUNTS.items()))
         listing = json.load(GOOGLE_HTTP.open(Request(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&labelIds=INBOX",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=15&labelIds=INBOX",
             headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
         records = []
         for item in listing.get("messages", []):
@@ -253,7 +253,7 @@ class App(BaseHTTPRequestHandler):
 
     def _recent_gmail_messages(self):
         try:
-            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=50")
+            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=15")
         except Exception:
             return []
     def _workspace(self, section, query):
@@ -261,7 +261,7 @@ class App(BaseHTTPRequestHandler):
         if section == "Settings":
             slug = "settings"
         inbox_rows = self._recent_gmail_messages()
-        live_messages = "".join("<div class='email'><b>From:</b> " + escape(row.get("sender") or "Unknown sender") + "<br><b>Subject:</b> " + escape(row.get("subject") or "(no subject)") + "<p>" + escape(row.get("snippet") or "No preview available.") + "</p><span class='pill'>" + escape(row.get("classification") or "other") + "</span></div>" for row in inbox_rows) or "<p>No synced Gmail messages yet. Connect Gmail, then select <b>Sync Gmail now</b>.</p>"
+        live_messages = "".join("<div class='email'><b>From:</b> " + escape(row.get("sender") or "Unknown sender") + "<br><b>Subject:</b> " + escape(row.get("subject") or "(no subject)") + "<p><span class='pill'>" + escape(row.get("category") or "UNCLASSIFIED") + "</span> &nbsp; <b>Routing:</b> " + escape(row.get("status") or "PENDING") + "</p><p>" + escape(row.get("snippet") or "No preview available.") + "</p></div>" for row in inbox_rows) or "<p>No synced Gmail messages yet. Connect Gmail, then select <b>Sync Gmail now</b>.</p>"
         shipping_rows = [row for row in inbox_rows if row.get("category") == "BL_COMPARISON"]
         settlement_rows = [row for row in inbox_rows if row.get("category") == "INVOICE_QUERY"]
         review_rows = [row for row in inbox_rows if row.get("status") in ("MISMATCH", "NEEDS_REVIEW")]
@@ -269,6 +269,8 @@ class App(BaseHTTPRequestHandler):
         settlement_table = "".join("<tr><td>" + escape(row.get("received_at") or "")[:10] + "</td><td>" + escape(row.get("sender") or "Gmail sender") + "</td><td>" + escape(row.get("subject") or "Settlement email") + "</td><td>Classified</td><td>AUTO_RESOLVED</td></tr>" for row in settlement_rows) or "<tr><td colspan='5'>No invoice-query emails have been synced yet.</td></tr>"
         bol_table = "".join("<tr><td><input type='checkbox' name='bol' value='BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "'></td><td>BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "</td><td>" + escape(row.get("subject") or "BL comparison") + "</td><td>" + escape(row.get("status") or "AUTO_RESOLVED") + "</td><td><a href='/bol/BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + ".pdf' download>Download PDF</a></td></tr>" for row in shipping_rows) or "<tr><td colspan='5'>No BL comparison records have been synced yet.</td></tr>"
         overview_cards = "<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>" + str(len(shipping_rows)) + "</b><small>from synced Gmail</small></article><article><small>EMAILS PROCESSED</small><b>" + str(len(inbox_rows)) + "</b><small>stored in Supabase</small></article><article><small>HUMAN REVIEW</small><b>" + str(len(review_rows)) + "</b><small>BOL drafts needing attention</small></article><article><small>SETTLEMENTS DUE</small><b>" + str(len(settlement_rows)) + "</b><small>settlement emails detected</small></article></div>"
+        category_counts = {category: sum(1 for row in inbox_rows if row.get("category") == category) for category in ("BL_COMPARISON", "SI_REQUEST", "INVOICE_QUERY", "GENERAL", "SPAM")}
+        category_breakdown = "<section><h2>Email Classification Breakdown</h2><div style='display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px'>" + "".join("<div style='border:1px solid #e1e8ef;border-radius:9px;padding:14px'><small style='color:#63758a'>" + category + "</small><b style='display:block;font-size:28px;margin-top:7px'>" + str(count) + "</b></div>" for category, count in category_counts.items()) + "</div></section>"
         def review_card(row):
             item_id = quote(row.get("gmail_message_id") or "", safe="")
             actions = "<p><a class='button' href='/review/resolve?id=" + item_id + "&decision=approved'>Approve Discrepancy</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=rejected_to_carrier'>Reject to Carrier</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=amended_docs_requested'>Request Amended Docs</a></p>"
@@ -278,7 +280,7 @@ class App(BaseHTTPRequestHandler):
             return "<div class='email'><h3>" + escape(row.get("subject") or "BL comparison") + "</h3><table><tr><th>Field Name</th><th>Shipping Instruction (SI)</th><th>Draft Bill of Lading (BL)</th><th>Status</th></tr>" + rows + "</table>" + actions + "</div>"
         review_cards = "".join(review_card(row) for row in review_rows) or "<p>No MISMATCH or NEEDS_REVIEW records are awaiting action.</p>"
         pages = {
-            "overview": overview_cards + "<div class='grid two'><section><h2>Live shipping workload</h2><table><tr><th>BOOKING</th><th>SENDER</th><th>EMAIL SUBJECT</th><th>RECEIVED</th><th>STATE</th></tr>" + shipment_table + "</table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Live processing</h2><p>Records refresh after Gmail sync. Use Inbox intelligence to run an immediate sync.</p><a class='button' href='/app/inbox-intelligence'>Open inbox</a></section></div>",
+            "overview": overview_cards + category_breakdown + "<div class='grid two'><section><h2>Live shipping workload</h2><table><tr><th>BOOKING</th><th>SENDER</th><th>EMAIL SUBJECT</th><th>RECEIVED</th><th>STATE</th></tr>" + shipment_table + "</table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Live processing</h2><p>Records refresh after Gmail sync. Use Inbox intelligence to run an immediate sync.</p><a class='button' href='/app/inbox-intelligence'>Open inbox</a></section></div>",
             "inbox-intelligence": """<section><h2>Incoming email</h2><p>Connect Gmail once, then use Sync Gmail now to bring the latest inbox metadata into Supabase for classification.</p><p><a class='button' href='/gmail/sync'>Sync Gmail now</a></p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>Live mailbox messages</h2>""" + live_messages + "</section>",
             "shipment-operations": "<section><h2>Shipment operations</h2><p>Live shipping records detected from synced Gmail messages.</p><table><tr><th>BOOKING</th><th>CUSTOMER / SENDER</th><th>EMAIL SUBJECT</th><th>RECEIVED</th><th>STATE</th></tr>" + shipment_table + "</table></section>",
             "verification-queue": "<section><h2>Verification queue</h2><p>Live shipping documents awaiting a human decision. A decision is written back to Supabase and removed from this queue.</p>" + review_cards + "</section>",
