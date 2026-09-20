@@ -278,47 +278,90 @@ class App(BaseHTTPRequestHandler):
                      and row.get("category") == "BL_COMPARISON"), None)
 
     def _build_bol_pdf(self, record, bol_ref):
-        """Build a one-page audited PDF from the real-time extracted SI/BL fields."""
+        """Build a styled, ASCII-safe verification certificate from live audit data."""
         def clean(value):
-            return str(value if value not in (None, "") else "—").encode("latin-1", "replace").decode("latin-1")
+            if value in (None, ""):
+                return "N/A"
+            replacements = {"-": "-", "-": "-", "'": "'", "'": "'", '"': '"', '"': '"', "...": "...", "\u00a0": " "}
+            text = str(value)
+            for source, replacement in replacements.items():
+                text = text.replace(source, replacement)
+            return text.encode("ascii", "ignore").decode("ascii").strip() or "N/A"
         def literal(value):
             return clean(value).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        def text(cmds, x, y, value, size=9, color="0.06 0.09 0.16"):
+            cmds.extend([color + " rg", f"/F1 {size} Tf", f"1 0 0 1 {x} {y} Tm (" + literal(value) + ") Tj"])
+        def rect(cmds, x, y, width, height, color):
+            cmds.append(color + f" rg {x} {y} {width} {height} re f")
+        def clipped(value, length):
+            value = clean(value)
+            return value if len(value) <= length else value[: max(0, length - 3)] + "..."
         si, bl = record.get("si_data") or {}, record.get("bl_data") or {}
         defects = set(record.get("defect_fields") or [])
-        labels = {"shipper": "Shipper", "consignee": "Consignee", "notify_party": "Notify Party", "port_of_loading": "Port of Loading", "port_of_discharge": "Port of Discharge", "container_count": "Container Count", "gross_weight_kg": "Gross Weight (kg)"}
-        lines = [
-            ("CargoVeritas — Audited Bill of Lading", 18),
-            ("Reference: " + bol_ref + "     Audit state: " + clean(record.get("status")), 10),
-            ("Source email: " + clean(record.get("sender")), 9),
-            ("Subject: " + clean(record.get("subject")), 9),
-            ("", 8),
-            ("Field                         Shipping Instruction (SI)              Draft Bill of Lading (BL)       Result", 9),
-        ]
-        for field in FIELDS:
-            outcome = "DISCREPANCY" if field in defects else "MATCH"
-            lines.append((f"{labels[field][:28]:28} {clean(si.get(field))[:31]:31} {clean(bl.get(field))[:31]:31} {outcome}", 8))
-        lines += [("", 8), ("Audit source: structured data extracted from the currently synced Gmail email and its attachments.", 8), ("Generated: " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), 8)]
-        commands, y = ["BT"], 790
-        for text, size in lines:
-            commands.extend([f"/F1 {size} Tf", f"1 0 0 1 50 {y} Tm ({literal(text)}) Tj"])
-            y -= 20 if size >= 16 else 15
-        commands.append("ET")
-        stream = "\n".join(commands).encode("latin-1", "replace")
+        labels = {"shipper": "Shipper", "consignee": "Consignee", "notify_party": "Notify Party", "port_of_loading": "Port of Loading (POL)", "port_of_discharge": "Port of Discharge (POD)", "container_count": "Container Count", "gross_weight_kg": "Gross Weight (kg)"}
+        state_map = {"OK": ("PASSED / OK", "0.086 0.639 0.290"), "MISMATCH": ("DISCREPANCY DETECTED", "0.863 0.149 0.149"), "NEEDS_REVIEW": ("HUMAN REVIEW REQUIRED", "0.843 0.467 0.024")}
+        state_text, state_color = state_map.get(record.get("status"), ("HUMAN REVIEW REQUIRED", "0.843 0.467 0.024"))
+        commands = []
+        rect(commands, 0, 700, 612, 142, "0.059 0.090 0.165")
+        text(commands, 34, 802, "CARGOVERITAS AUDIT VERIFICATION CERTIFICATE", 18, "1 1 1")
+        text(commands, 34, 778, "CargoVeritas - Audited Bill of Lading", 10, "0.85 0.90 0.97")
+        text(commands, 34, 748, "Audit Reference: " + bol_ref, 9, "1 1 1")
+        rect(commands, 334, 735, 238, 24, state_color)
+        text(commands, 344, 744, state_text, 8, "1 1 1")
+        text(commands, 34, 725, "Source Email: " + clipped(record.get("sender"), 69), 8, "0.85 0.90 0.97")
+        text(commands, 34, 710, "Subject: " + clipped(record.get("subject"), 77), 8, "0.85 0.90 0.97")
+        text(commands, 34, 692, "Timestamp (UTC): " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), 8, "0.85 0.90 0.97")
+        x, widths, y, row_height = 25, (125, 165, 165, 107), 648, 36
+        rect(commands, x, y, sum(widths), 27, "0.118 0.161 0.231")
+        headers = ("Field", "Shipping Instruction (SI)", "Draft Bill of Lading (BL)", "Audit Result")
+        cursor = x
+        for header, width in zip(headers, widths):
+            text(commands, cursor + 6, y + 10, header, 8, "1 1 1")
+            cursor += width
+        for index, field in enumerate(FIELDS):
+            row_y = y - (index + 1) * row_height
+            rect(commands, x, row_y, sum(widths), row_height, "0.973 0.980 0.988" if index % 2 == 0 else "1 1 1")
+            valid = si.get(field) not in (None, "") and bl.get(field) not in (None, "")
+            outcome = "N/A" if not valid else "MISMATCH" if field in defects else "MATCH"
+            if outcome == "MISMATCH":
+                rect(commands, x + widths[0], row_y, widths[1] + widths[2], row_height, "0.996 0.922 0.922")
+            cursor = x
+            values = (labels[field], clipped(si.get(field), 27), clipped(bl.get(field), 27))
+            for value, width in zip(values, widths[:3]):
+                text(commands, cursor + 6, row_y + 13, value, 8)
+                cursor += width
+            if outcome == "MISMATCH":
+                rect(commands, cursor + 6, row_y + 9, 92, 17, "0.937 0.267 0.267")
+                text(commands, cursor + 12, row_y + 14, outcome, 7, "1 1 1")
+            elif outcome == "MATCH":
+                text(commands, cursor + 8, row_y + 13, outcome, 8, "0.086 0.639 0.290")
+            else:
+                text(commands, cursor + 8, row_y + 13, "N/A - UNEXTRACTED", 7, "0.392 0.455 0.545")
+            cursor = x
+            for width in widths:
+                commands.append("0.80 0.84 0.89 RG 0.4 w " + f"{cursor} {row_y} m {cursor} {row_y + row_height} l S")
+                cursor += width
+        footer_y = y - len(FIELDS) * row_height - 35
+        commands.append("0.75 0.80 0.86 RG 0.6 w 25 " + str(footer_y + 20) + " m 587 " + str(footer_y + 20) + " l S")
+        text(commands, 25, footer_y, "CargoVeritas Control Tower | Automated Trade Document Verification Engine", 8, "0.23 0.29 0.38")
+        text(commands, 25, footer_y - 14, "Verified against operational transport requirements. Generated automatically.", 8, "0.39 0.46 0.55")
+        stream = ("BT\n" + "\n".join(commands) + "\nET").encode("ascii")
         objects = [
             b"<< /Type /Catalog /Pages 2 0 R >>",
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
             b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+            b"<< /Title (CargoVeritas - Audited Bill of Lading) /Author (CargoVeritas) >>",
         ]
         pdf, offsets = bytearray(b"%PDF-1.4\n"), []
         for number, obj in enumerate(objects, 1):
             offsets.append(len(pdf))
             pdf.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
         xref = len(pdf)
-        pdf.extend(b"xref\n0 6\n0000000000 65535 f \n")
+        pdf.extend(b"xref\n0 7\n0000000000 65535 f \n")
         pdf.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets))
-        pdf.extend(f"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+        pdf.extend(f"trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
         return bytes(pdf)
 
     def _recent_gmail_messages(self):
