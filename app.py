@@ -6,7 +6,7 @@ import os
 import secrets
 from io import BytesIO
 from urllib.parse import parse_qs, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
@@ -25,6 +25,9 @@ document.querySelectorAll("nav button").forEach(function(b){b.onclick=function()
 
 OAUTH_STATES = set()
 CONNECTED_ACCOUNTS = {}
+# The local development runtime has a placeholder localhost proxy.  Google OAuth
+# must connect directly instead of inheriting that unusable proxy configuration.
+GOOGLE_HTTP = build_opener(ProxyHandler({}))
 
 
 def load_local_env():
@@ -78,8 +81,8 @@ class App(BaseHTTPRequestHandler):
                     "redirect_uri": "http://127.0.0.1:8000/auth/gmail/callback",
                     "grant_type": "authorization_code",
                 }).encode()
-                token = json.load(urlopen(Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})))
-                profile = json.load(urlopen(Request("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": "Bearer " + token["access_token"]})))
+                token = json.load(GOOGLE_HTTP.open(Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})))
+                profile = json.load(GOOGLE_HTTP.open(Request("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": "Bearer " + token["access_token"]})))
                 CONNECTED_ACCOUNTS[profile["email"]] = token
                 self._html("<h1>Gmail connected</h1><p><b>" + profile["email"] + "</b> is now connected with read-only Gmail access.</p><p><a href='/'>Return to CargoVeritas</a></p>")
             except Exception as error:
