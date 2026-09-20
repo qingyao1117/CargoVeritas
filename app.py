@@ -293,9 +293,21 @@ class App(BaseHTTPRequestHandler):
             cmds.extend([color + " rg", f"/F{'2' if bold else '1'} {size} Tf", f"1 0 0 1 {x} {y} Tm (" + literal(value) + ") Tj"])
         def rect(cmds, x, y, width, height, color):
             cmds.append(color + f" rg {x} {y} {width} {height} re f")
-        def clipped(value, length):
-            value = clean(value)
-            return value if len(value) <= length else value[: max(0, length - 3)] + "..."
+        def wrapped(value, width):
+            """Wrap a value without clipping so every extracted detail is printed."""
+            words, lines, current = clean(value).split(), [], ""
+            for word in words:
+                if len(word) > width:
+                    if current:
+                        lines.append(current); current = ""
+                    lines.extend(word[index:index + width] for index in range(0, len(word), width))
+                elif not current or len(current) + 1 + len(word) <= width:
+                    current = word if not current else current + " " + word
+                else:
+                    lines.append(current); current = word
+            if current:
+                lines.append(current)
+            return lines or ["N/A"]
         si, bl = record.get("si_data") or {}, record.get("bl_data") or {}
         defects = set(record.get("defect_fields") or [])
         labels = {"shipper": "Shipper", "consignee": "Consignee", "notify_party": "Notify Party", "port_of_loading": "Port of Loading (POL)", "port_of_discharge": "Port of Discharge (POD)", "container_count": "Container Count", "gross_weight_kg": "Gross Weight (kg)"}
@@ -308,8 +320,8 @@ class App(BaseHTTPRequestHandler):
         text(commands, 34, 748, "Audit Reference: " + bol_ref, 9, "1 1 1", True)
         rect(commands, 334, 735, 238, 24, state_color)
         text(commands, 344, 744, state_text, 8, "1 1 1", True)
-        text(commands, 34, 725, "Source Email: " + clipped(record.get("sender"), 69), 8, "0.85 0.90 0.97")
-        text(commands, 34, 710, "Subject: " + clipped(record.get("subject"), 77), 8, "0.85 0.90 0.97")
+        text(commands, 34, 725, "Source Email: " + clean(record.get("sender")), 8, "0.85 0.90 0.97")
+        text(commands, 34, 710, "Subject: " + clean(record.get("subject")), 8, "0.85 0.90 0.97")
         text(commands, 34, 692, "Timestamp (UTC): " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), 8, "0.85 0.90 0.97")
         x, widths, y, row_height = 25, (125, 165, 165, 107), 648, 36
         rect(commands, x, y, sum(widths), 27, "0.118 0.161 0.231")
@@ -318,30 +330,34 @@ class App(BaseHTTPRequestHandler):
         for header, width in zip(headers, widths):
             text(commands, cursor + 6, y + 10, header, 8, "1 1 1", True)
             cursor += width
+        current_y = y
         for index, field in enumerate(FIELDS):
-            row_y = y - (index + 1) * row_height
-            rect(commands, x, row_y, sum(widths), row_height, "0.973 0.980 0.988" if index % 2 == 0 else "1 1 1")
             valid = si.get(field) not in (None, "") and bl.get(field) not in (None, "")
             outcome = "N/A" if not valid else "MISMATCH" if field in defects else "MATCH"
+            cell_lines = (wrapped(labels[field], 19), wrapped(si.get(field), 27), wrapped(bl.get(field), 27))
+            dynamic_height = max(max(len(lines) for lines in cell_lines) * 10 + 14, row_height)
+            row_y = current_y - dynamic_height
+            rect(commands, x, row_y, sum(widths), dynamic_height, "0.973 0.980 0.988" if index % 2 == 0 else "1 1 1")
             if outcome == "MISMATCH":
-                rect(commands, x + widths[0], row_y, widths[1] + widths[2], row_height, "0.996 0.922 0.922")
+                rect(commands, x + widths[0], row_y, widths[1] + widths[2], dynamic_height, "0.996 0.922 0.922")
             cursor = x
-            values = (labels[field], clipped(si.get(field), 27), clipped(bl.get(field), 27))
-            for value, width in zip(values, widths[:3]):
-                text(commands, cursor + 6, row_y + 13, value, 8)
+            for lines, width in zip(cell_lines, widths[:3]):
+                for line_index, line in enumerate(lines):
+                    text(commands, cursor + 6, row_y + dynamic_height - 12 - line_index * 10, line, 8)
                 cursor += width
             if outcome == "MISMATCH":
-                rect(commands, cursor + 6, row_y + 9, 92, 17, "0.937 0.267 0.267")
-                text(commands, cursor + 12, row_y + 14, outcome, 7, "1 1 1", True)
+                rect(commands, cursor + 6, row_y + dynamic_height - 26, 92, 17, "0.937 0.267 0.267")
+                text(commands, cursor + 12, row_y + dynamic_height - 21, outcome, 7, "1 1 1", True)
             elif outcome == "MATCH":
-                text(commands, cursor + 8, row_y + 13, outcome, 8, "0.086 0.639 0.290", True)
+                text(commands, cursor + 8, row_y + dynamic_height - 14, outcome, 8, "0.086 0.639 0.290", True)
             else:
-                text(commands, cursor + 8, row_y + 13, "N/A - UNEXTRACTED", 7, "0.392 0.455 0.545")
+                text(commands, cursor + 8, row_y + dynamic_height - 14, "N/A - UNEXTRACTED", 7, "0.392 0.455 0.545")
             cursor = x
             for width in widths:
-                commands.append("0.80 0.84 0.89 RG 0.4 w " + f"{cursor} {row_y} m {cursor} {row_y + row_height} l S")
+                commands.append("0.80 0.84 0.89 RG 0.4 w " + f"{cursor} {row_y} m {cursor} {row_y + dynamic_height} l S")
                 cursor += width
-        footer_y = y - len(FIELDS) * row_height - 35
+            current_y = row_y
+        footer_y = current_y - 35
         commands.append("0.75 0.80 0.86 RG 0.6 w 25 " + str(footer_y + 20) + " m 587 " + str(footer_y + 20) + " l S")
         text(commands, 25, footer_y, "CargoVeritas Control Tower | Automated Trade Document Verification Engine", 8, "0.23 0.29 0.38")
         text(commands, 25, footer_y - 14, "Verified against operational transport requirements. Generated automatically.", 8, "0.39 0.46 0.55")
