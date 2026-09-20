@@ -94,13 +94,17 @@ def _label_value(text: str, labels) -> str | None:
 
 def extract_fields_from_doc(text: str) -> dict:
     """Extract exactly the seven mandatory values; unknown values remain null."""
+    # Bilingual carrier templates add one or more parenthetical translations to
+    # field labels, e.g. "POD (\u5378\u8d27\u6e2f)". Remove label annotations before matching.
+    label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s+of\s+loading|load(?:ing)?\s+port|pol|port\s+of\s+discharge|discharge\s+port|pod|(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?|container\s+count|total\s+containers|(?:total\s+)?gross\s*(?:weight|wt)"
+    text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
     result["shipper"] = _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
     result["consignee"] = _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
     result["notify_party"] = _label_value(text, (r"notify(?:\s+party)?",))
     result["port_of_loading"] = _label_value(text, (r"port\s+of\s+loading(?:\s*\(pol\))?", r"load(?:ing)?\s+port", r"pol"))
     result["port_of_discharge"] = _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
-    containers = _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count"))
+    containers = _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
     weight = _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if containers:
         number = re.search(r"\d+", containers.replace(",", ""))
