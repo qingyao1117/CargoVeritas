@@ -121,8 +121,30 @@ def _normal_text(value) -> str:
 
 def _normal_port(value) -> str:
     text = _normal_text(value)
-    aliases = {"port klang": "mypkg", "pkg": "mypkg", "mypkg": "mypkg", "callao": "pecll", "pecll": "pecll"}
+    aliases = {"port klang": "mypkg", "pkg": "mypkg", "mypkg": "mypkg", "callao": "pecll", "pecll": "pecll", "singapore": "sgsin", "sg sin": "sgsin", "sgsin": "sgsin", "karachi": "pkkhi", "pk khi": "pkkhi", "pkkhi": "pkkhi"}
     return next((code for name, code in aliases.items() if name in text), text)
+
+
+def _primary_entity(value) -> str:
+    """Return the primary company name, without trailing address details."""
+    first = re.split(r"[|;\r\n]", str(value or ""), maxsplit=1)[0]
+    return _normal_text(first)
+
+
+def _same_entity(left, right) -> bool:
+    left, right = _primary_entity(left), _primary_entity(right)
+    if not left or not right:
+        return False
+    # Entity fields often differ only because one document retains an address.
+    return left == right or (min(len(left), len(right)) >= 5 and (left in right or right in left))
+
+
+def _normal_number(value, *, integer=False):
+    match = re.search(r"\d[\d,\s]*(?:\.\d+)?", str(value or ""))
+    if not match:
+        return None
+    number = float(re.sub(r"[,\s]", "", match.group()))
+    return int(number) if integer else number
 
 
 def compare_fields(si_data: dict, bl_data: dict) -> list[str]:
@@ -131,11 +153,14 @@ def compare_fields(si_data: dict, bl_data: dict) -> list[str]:
     for field in FIELDS:
         si, bl = si_data.get(field), bl_data.get(field)
         if field == "container_count":
-            same = int(si) == int(bl)
+            same = _normal_number(si, integer=True) == _normal_number(bl, integer=True)
         elif field == "gross_weight_kg":
-            same = abs(float(si) - float(bl)) < 0.01
+            si_number, bl_number = _normal_number(si), _normal_number(bl)
+            same = si_number is not None and bl_number is not None and abs(si_number - bl_number) < 0.01
         elif field in ("port_of_loading", "port_of_discharge"):
             same = _normal_port(si) == _normal_port(bl)
+        elif field in ("shipper", "consignee", "notify_party"):
+            same = _same_entity(si, bl)
         else:
             same = _normal_text(si) == _normal_text(bl)
         if not same:
