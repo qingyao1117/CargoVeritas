@@ -1,4 +1,3 @@
-
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -85,7 +84,9 @@ def extract_text_from_bytes(raw: bytes, filename: str) -> str:
 
 def _label_value(text: str, labels) -> str | None:
     for label in labels:
-        match = re.search(r"(?im)^\s*" + label + r"\s*(?::|\-|\|)\s*(.+?)\s*$", text)
+        # PDFs preserve label/value columns as multiple spaces; Word and Excel
+        # tables arrive as pipe-delimited text after extraction.
+        match = re.search(r"(?im)^\s*" + label + r"(?:\s*(?::|\-|\|)\s*|\s{2,})(.+?)\s*$", text)
         if match:
             return match.group(1).strip(" |\t")
     return None
@@ -94,13 +95,13 @@ def _label_value(text: str, labels) -> str | None:
 def extract_fields_from_doc(text: str) -> dict:
     """Extract exactly the seven mandatory values; unknown values remain null."""
     result = {field: None for field in FIELDS}
-    result["shipper"] = _label_value(text, (r"shipper(?:/exporter)?",))
-    result["consignee"] = _label_value(text, (r"consignee",))
+    result["shipper"] = _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
+    result["consignee"] = _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
     result["notify_party"] = _label_value(text, (r"notify(?:\s+party)?",))
     result["port_of_loading"] = _label_value(text, (r"port\s+of\s+loading(?:\s*\(pol\))?", r"load(?:ing)?\s+port", r"pol"))
-    result["port_of_discharge"] = _label_value(text, (r"port\s+of\s+discharge", r"discharge\s+port", r"pod"))
+    result["port_of_discharge"] = _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
     containers = _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count"))
-    weight = _label_value(text, (r"gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
+    weight = _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if containers:
         number = re.search(r"\d+", containers.replace(",", ""))
         result["container_count"] = int(number.group()) if number else None
