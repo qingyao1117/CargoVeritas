@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import base64
 import threading
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from io import BytesIO
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
+from main import FIELDS, extract_text_from_bytes, process_email
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -135,12 +137,14 @@ class App(BaseHTTPRequestHandler):
         if parsed.path == "/review/resolve":
             review_id = parse_qs(parsed.query).get("id", [""])[0]
             decision = parse_qs(parsed.query).get("decision", [""])[0]
-            if not review_id or decision not in ("approved", "correction_requested"):
+            if not review_id or decision not in ("approved", "rejected_to_carrier", "amended_docs_requested"):
                 self._html("<h1>Review action could not be recorded</h1><p>Select a valid verification decision.</p>", 400)
                 return
             try:
-                self._supabase_json("/rest/v1/gmail_messages?gmail_message_id=eq." + quote(review_id, safe=""), "PATCH", {"processing_status": decision})
-                self._html("<h1>Verification decision recorded</h1><p>The audited Gmail record is now marked <b>" + escape(decision.replace("_", " ")) + "</b>.</p><p><a href='/app/verification-queue'>Return to verification queue</a></p>")
+                status = "RESOLVED" if decision == "approved" else "REJECTED_TO_CARRIER" if decision == "rejected_to_carrier" else "AMENDED_DOCS_REQUESTED"
+                note = "Carrier discrepancy notice generated for dispatch." if decision == "rejected_to_carrier" else "Amended shipping documents requested." if decision == "amended_docs_requested" else "Discrepancy approved by reviewer."
+                self._supabase_json("/rest/v1/gmail_messages?gmail_message_id=eq." + quote(review_id, safe=""), "PATCH", {"status": status, "processing_status": status, "operator_action": decision, "operator_notes": note})
+                self._html("<h1>Verification decision recorded</h1><p>The audited Gmail record is now marked <b>" + escape(status.replace("_", " ")) + "</b>. " + escape(note) + "</p><p><a href='/app/verification-queue'>Return to verification queue</a></p>")
             except Exception as error:
                 print("Review action failed:", type(error).__name__, str(error))
                 self._html("<h1>Review action failed</h1><p>The decision could not be saved to Supabase.</p>", 502)
@@ -196,6 +200,23 @@ class App(BaseHTTPRequestHandler):
         raw = response.read()
         return json.loads(raw) if raw else []
 
+    def _gmail_parts(self, payload):
+        parts = [payload]
+        for part in payload.get("parts", []):
+            parts.extend(self._gmail_parts(part))
+        return parts
+
+    def _gmail_attachment_bytes(self, message_id, body, token):
+        encoded = body.get("data")
+        if not encoded and body.get("attachmentId"):
+            data = json.load(GOOGLE_HTTP.open(Request(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + message_id + "/attachments/" + body["attachmentId"],
+                headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
+            encoded = data.get("data")
+        if not encoded:
+            return b""
+        return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+
     def _sync_gmail_to_supabase(self):
         if not CONNECTED_ACCOUNTS:
             raise RuntimeError("Connect a Gmail account first, then return here to sync it.")
@@ -206,23 +227,33 @@ class App(BaseHTTPRequestHandler):
         records = []
         for item in listing.get("messages", []):
             message = json.load(GOOGLE_HTTP.open(Request(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + item["id"] + "?format=metadata&metadataHeaders=From&metadataHeaders=Subject",
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + item["id"] + "?format=full",
                 headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
-            headers = {h["name"].lower(): h["value"] for h in message.get("payload", {}).get("headers", [])}
+            payload = message.get("payload", {})
+            parts = self._gmail_parts(payload)
+            headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
             subject = headers.get("subject", "(no subject)")
-            words = (subject + " " + message.get("snippet", "")).lower()
-            category = "settlement" if any(w in words for w in ("invoice", "payment", "settlement")) else "shipping" if any(w in words for w in ("bol", "bill of lading", "shipping", "container", "booking")) else "other"
             received = datetime.fromtimestamp(int(message.get("internalDate", "0")) / 1000, tz=timezone.utc).isoformat()
-            amount = re.search(r"(?:RM|MYR)\s*([\d,]+(?:\.\d{2})?)", subject + " " + message.get("snippet", ""), re.I)
-            status = "review" if category == "shipping" else "processed"
-            records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "received_at": received, "classification": category, "processing_status": status, "extraction": {"source": "gmail_metadata", "category": category, "amount_rm": amount.group(1) if amount else None}})
+            attachment_texts, attachment_summary, body_chunks = {}, [], []
+            for part in parts:
+                mime, filename = part.get("mimeType", ""), part.get("filename", "")
+                if mime == "text/plain" and part.get("body", {}).get("data"):
+                    body_chunks.append(self._gmail_attachment_bytes(message["id"], part["body"], token).decode("utf-8", errors="replace"))
+                if filename:
+                    raw = self._gmail_attachment_bytes(message["id"], part.get("body", {}), token)
+                    text = extract_text_from_bytes(raw, filename)
+                    attachment_texts[filename] = text
+                    attachment_summary.append({"filename": filename, "mime_type": mime, "readable": bool(text.strip())})
+            body = "\n".join(body_chunks) or message.get("snippet", "")
+            processed = process_email({"subject": subject, "body": body}, attachment_texts)
+            records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "body_snippet": body[:4000], "received_at": received, "classification": processed["category"], "processing_status": processed["status"], "category": processed["category"], "status": processed["status"], "review_reason": processed["review_reason"], "defect_fields": processed["defect_fields"], "si_data": processed["si_data"], "bl_data": processed["bl_data"], "attachment_summary": attachment_summary, "extraction": {"source": "gmail_documents", "category": processed["category"]}})
         if records:
             self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records)
         return {"account": account, "processed": len(records)}
 
     def _recent_gmail_messages(self):
         try:
-            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,classification,processing_status,received_at,extraction&order=received_at.desc&limit=50")
+            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=50")
         except Exception:
             return []
     def _workspace(self, section, query):
@@ -231,14 +262,21 @@ class App(BaseHTTPRequestHandler):
             slug = "settings"
         inbox_rows = self._recent_gmail_messages()
         live_messages = "".join("<div class='email'><b>From:</b> " + escape(row.get("sender") or "Unknown sender") + "<br><b>Subject:</b> " + escape(row.get("subject") or "(no subject)") + "<p>" + escape(row.get("snippet") or "No preview available.") + "</p><span class='pill'>" + escape(row.get("classification") or "other") + "</span></div>" for row in inbox_rows) or "<p>No synced Gmail messages yet. Connect Gmail, then select <b>Sync Gmail now</b>.</p>"
-        shipping_rows = [row for row in inbox_rows if row.get("classification") == "shipping"]
-        settlement_rows = [row for row in inbox_rows if row.get("classification") == "settlement"]
-        review_rows = [row for row in shipping_rows if row.get("processing_status") not in ("approved", "correction_requested")]
-        shipment_table = "".join("<tr><td>GM-" + escape((row.get("gmail_message_id") or "")[-8:]) + "</td><td>" + escape(row.get("sender") or "Gmail sender") + "</td><td>" + escape(row.get("subject") or "Shipping email") + "</td><td>" + escape(row.get("received_at") or "")[:10] + "</td><td>" + escape(row.get("processing_status") or "processed") + "</td></tr>" for row in shipping_rows) or "<tr><td colspan='5'>No shipping emails have been synced yet.</td></tr>"
-        settlement_table = "".join("<tr><td>" + escape(row.get("received_at") or "")[:10] + "</td><td>" + escape(row.get("sender") or "Gmail sender") + "</td><td>" + escape(row.get("subject") or "Settlement email") + "</td><td>RM " + escape(str((row.get("extraction") or {}).get("amount_rm") or "pending extraction")) + "</td><td>Imported</td></tr>" for row in settlement_rows) or "<tr><td colspan='5'>No settlement emails have been synced yet.</td></tr>"
-        bol_table = "".join("<tr><td><input type='checkbox' name='bol' value='BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "'></td><td>BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "</td><td>" + escape(row.get("subject") or "Shipping email") + "</td><td>" + escape(row.get("processing_status") or "processed") + "</td><td><a href='/bol/BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + ".pdf' download>Download PDF</a></td></tr>" for row in shipping_rows) or "<tr><td colspan='5'>No BOL-related shipping emails have been synced yet.</td></tr>"
+        shipping_rows = [row for row in inbox_rows if row.get("category") == "BL_COMPARISON"]
+        settlement_rows = [row for row in inbox_rows if row.get("category") == "INVOICE_QUERY"]
+        review_rows = [row for row in inbox_rows if row.get("status") in ("MISMATCH", "NEEDS_REVIEW")]
+        shipment_table = "".join("<tr><td>GM-" + escape((row.get("gmail_message_id") or "")[-8:]) + "</td><td>" + escape(row.get("sender") or "Gmail sender") + "</td><td>" + escape(row.get("subject") or "Shipping email") + "</td><td>" + escape(row.get("received_at") or "")[:10] + "</td><td>" + escape(row.get("status") or "AUTO_RESOLVED") + "</td></tr>" for row in shipping_rows) or "<tr><td colspan='5'>No BL comparison emails have been synced yet.</td></tr>"
+        settlement_table = "".join("<tr><td>" + escape(row.get("received_at") or "")[:10] + "</td><td>" + escape(row.get("sender") or "Gmail sender") + "</td><td>" + escape(row.get("subject") or "Settlement email") + "</td><td>Classified</td><td>AUTO_RESOLVED</td></tr>" for row in settlement_rows) or "<tr><td colspan='5'>No invoice-query emails have been synced yet.</td></tr>"
+        bol_table = "".join("<tr><td><input type='checkbox' name='bol' value='BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "'></td><td>BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + "</td><td>" + escape(row.get("subject") or "BL comparison") + "</td><td>" + escape(row.get("status") or "AUTO_RESOLVED") + "</td><td><a href='/bol/BOL-" + escape((row.get("gmail_message_id") or "")[-8:]) + ".pdf' download>Download PDF</a></td></tr>" for row in shipping_rows) or "<tr><td colspan='5'>No BL comparison records have been synced yet.</td></tr>"
         overview_cards = "<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>" + str(len(shipping_rows)) + "</b><small>from synced Gmail</small></article><article><small>EMAILS PROCESSED</small><b>" + str(len(inbox_rows)) + "</b><small>stored in Supabase</small></article><article><small>HUMAN REVIEW</small><b>" + str(len(review_rows)) + "</b><small>BOL drafts needing attention</small></article><article><small>SETTLEMENTS DUE</small><b>" + str(len(settlement_rows)) + "</b><small>settlement emails detected</small></article></div>"
-        review_cards = "".join("<div class='email'><h3>" + escape(row.get("subject") or "Shipping document review") + "</h3><p><b>Sender:</b> " + escape(row.get("sender") or "Unknown sender") + "</p><p>" + escape(row.get("snippet") or "No email preview available.") + "</p><p><a class='button' href='/review/resolve?id=" + quote(row.get("gmail_message_id") or "", safe="") + "&decision=correction_requested'>Request correction</a> <a class='button muted' href='/review/resolve?id=" + quote(row.get("gmail_message_id") or "", safe="") + "&decision=approved'>Approve after review</a></p></div>" for row in review_rows) or "<p>No live shipping documents currently need review. New shipping emails are placed here after the next Gmail sync.</p>"
+        def review_card(row):
+            item_id = quote(row.get("gmail_message_id") or "", safe="")
+            actions = "<p><a class='button' href='/review/resolve?id=" + item_id + "&decision=approved'>Approve Discrepancy</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=rejected_to_carrier'>Reject to Carrier</a> <a class='button muted' href='/review/resolve?id=" + item_id + "&decision=amended_docs_requested'>Request Amended Docs</a></p>"
+            if row.get("status") == "NEEDS_REVIEW":
+                return "<div class='email'><h3>" + escape(row.get("subject") or "Document review") + "</h3><p><b>Escalation reason:</b> " + escape(row.get("review_reason") or "document could not be verified") + "</p><p>" + escape(row.get("body_snippet") or row.get("snippet") or "No email body available.") + "</p>" + actions + "</div>"
+            rows = "".join("<tr" + (" class='alert'" if field in (row.get("defect_fields") or []) else "") + "><td>" + escape(field.replace("_", " ").title()) + "</td><td>" + escape(str((row.get("si_data") or {}).get(field) or "")) + "</td><td>" + escape(str((row.get("bl_data") or {}).get(field) or "")) + "</td><td>" + ("Mismatch" if field in (row.get("defect_fields") or []) else "Match") + "</td></tr>" for field in FIELDS)
+            return "<div class='email'><h3>" + escape(row.get("subject") or "BL comparison") + "</h3><table><tr><th>Field Name</th><th>Shipping Instruction (SI)</th><th>Draft Bill of Lading (BL)</th><th>Status</th></tr>" + rows + "</table>" + actions + "</div>"
+        review_cards = "".join(review_card(row) for row in review_rows) or "<p>No MISMATCH or NEEDS_REVIEW records are awaiting action.</p>"
         pages = {
             "overview": overview_cards + "<div class='grid two'><section><h2>Live shipping workload</h2><table><tr><th>BOOKING</th><th>SENDER</th><th>EMAIL SUBJECT</th><th>RECEIVED</th><th>STATE</th></tr>" + shipment_table + "</table><p><a class='button' href='/app/shipment-operations'>Open shipment operations</a></p></section><section><h2>Live processing</h2><p>Records refresh after Gmail sync. Use Inbox intelligence to run an immediate sync.</p><a class='button' href='/app/inbox-intelligence'>Open inbox</a></section></div>",
             "inbox-intelligence": """<section><h2>Incoming email</h2><p>Connect Gmail once, then use Sync Gmail now to bring the latest inbox metadata into Supabase for classification.</p><p><a class='button' href='/gmail/sync'>Sync Gmail now</a></p><form method='get' action='/app/inbox-intelligence' class='search'><input name='q' placeholder='Search sender, booking number, or subject'><button>Search inbox</button></form></section><section><h2>Live mailbox messages</h2>""" + live_messages + "</section>",
