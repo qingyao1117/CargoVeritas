@@ -103,7 +103,7 @@ def _label_value(text: str, labels) -> str | None:
     for label in labels:
         # PDFs preserve label/value columns as multiple spaces; Word and Excel
         # tables arrive as pipe-delimited text after extraction.
-        match = re.search(r"(?im)^\s*" + label + r"(?:\s*(?::|\-|\|)\s*|\s{2,})(.+?)\s*$", text)
+        match = re.search(r"(?im)^\s*" + label + r"(?:\s*(?::|\-|\|)\s*|\s+)(.+?)\s*$", text)
         if match:
             return match.group(1).strip(" |\t")
     return None
@@ -113,16 +113,18 @@ def extract_fields_from_doc(text: str) -> dict:
     """Extract exactly the seven mandatory values; unknown values remain null."""
     # Bilingual carrier templates add one or more parenthetical translations to
     # field labels, e.g. "POD (\u5378\u8d27\u6e2f)". Remove label annotations before matching.
-    label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s*of\s*loading|load(?:ing)?\s*port|pol|port\s*of\s*discharge|discharge\s*port|pod|(?:no\.\s*of\s*)?containers?(?:\s*or\s*packages)?|container\s*count|total\s*containers|(?:total\s*)?gross\s*(?:weight|wt)"
+    label_terms = r"shipper(?:/exporter)?|consignee|to\s+the\s+order\s+of|notify(?:\s+party)?|port\s*of\s*loading|load(?:ing)?\s*port|pol|port\s*of\s*discharge|discharge\s*port|pod|(?:no\.\s*of\s*)?containers?(?:\s*or\s*packages)?|container\s*count|total\s*containers|(?:total\s*)?gross\s*(?:weight|wt)"
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
     result.update(extract_two_column_fields(text))
     result["shipper"] = result["shipper"] or _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
-    result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
+    result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?", r"to\s+the\s+order\s+of"))
     result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
     result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s*of\s*loading(?:\s*\(pol\))?", r"load(?:ing)?\s*port", r"pol"))
     result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s*of\s*discharge(?:\s*\(pod\))?", r"discharge\s*port", r"pod"))
-    containers = result["container_count"] or _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
+    # Prefer the explicit total.  Cargo document tables commonly contain a
+    # "CONTAINER NO. / DESCRIPTION" column header which is not a field value.
+    containers = result["container_count"] or _label_value(text, (r"total\s+containers", r"container\s+count", r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?"))
     weight = result["gross_weight_kg"] or _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if not weight:
         fallback = GROSS_WEIGHT_PATTERN.search(text)
@@ -175,25 +177,54 @@ def _normal_number(value, *, integer=False):
     return int(number) if integer else number
 
 
-def compare_fields(si_data: dict, bl_data: dict) -> list[str]:
-    """Compare all fields after normalizing harmless formatting differences."""
-    defects = []
+def _one_edit_apart(left, right):
+    """True only for a single insertion, deletion, or substitution."""
+    left, right = str(left or ""), str(right or "")
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    if len(left) > len(right):
+        left, right = right, left
+    index = 0
+    while index < len(left) and left[index] == right[index]:
+        index += 1
+    return left[index:] == right[index + 1:]
+
+
+def compare_fields_detailed(si_data: dict, bl_data: dict):
+    """Separate genuine mismatches from small differences requiring a person."""
+    mismatches, needs_review = [], []
     for field in FIELDS:
         si, bl = si_data.get(field), bl_data.get(field)
+        same, near = False, False
         if field == "container_count":
-            same = _normal_number(si, integer=True) == _normal_number(bl, integer=True)
+            si_number, bl_number = _normal_number(si, integer=True), _normal_number(bl, integer=True)
+            same = si_number is not None and si_number == bl_number
+            near = si_number is not None and bl_number is not None and abs(si_number - bl_number) == 1
         elif field == "gross_weight_kg":
             si_number, bl_number = _normal_number(si), _normal_number(bl)
             same = si_number is not None and bl_number is not None and abs(si_number - bl_number) < 0.01
+            near = si_number is not None and bl_number is not None and 0.01 <= abs(si_number - bl_number) <= 1
         elif field in ("port_of_loading", "port_of_discharge"):
-            same = _normal_port(si) == _normal_port(bl)
+            left, right = _normal_port(si), _normal_port(bl)
+            same, near = left == right, _one_edit_apart(left, right)
         elif field in ("shipper", "consignee", "notify_party"):
+            left, right = _primary_entity(si), _primary_entity(bl)
             same = _same_entity(si, bl)
+            near = not same and bool(left and right) and _one_edit_apart(left, right)
         else:
-            same = _normal_text(si) == _normal_text(bl)
+            left, right = _normal_text(si), _normal_text(bl)
+            same, near = left == right, _one_edit_apart(left, right)
         if not same:
-            defects.append(field)
-    return defects
+            (needs_review if near else mismatches).append(field)
+    return mismatches, needs_review
+
+
+def compare_fields(si_data: dict, bl_data: dict) -> list[str]:
+    """Compare all fields after normalizing harmless formatting differences."""
+    mismatches, needs_review = compare_fields_detailed(si_data, bl_data)
+    return mismatches + needs_review
 
 
 def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
@@ -220,8 +251,13 @@ def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
     if any(si_data[field] is None or bl_data[field] is None for field in FIELDS):
         result.update(status="NEEDS_REVIEW", review_reason="unreadable_document")
         return result
-    defects = compare_fields(si_data, bl_data)
-    result.update(status="MISMATCH" if defects else "OK", defect_fields=defects)
+    mismatches, needs_review = compare_fields_detailed(si_data, bl_data)
+    if mismatches:
+        result.update(status="MISMATCH", defect_fields=mismatches)
+    elif needs_review:
+        result.update(status="NEEDS_REVIEW", review_reason="minor_difference", defect_fields=needs_review)
+    else:
+        result.update(status="OK", defect_fields=[])
     return result
 
 
@@ -234,4 +270,3 @@ if __name__ == "__main__":
     inbox = Inbox(".")
     output = {email["email_id"]: inspect_email(email, inbox) for email in inbox}
     Path("submission.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
-
