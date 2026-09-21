@@ -122,9 +122,22 @@ def extract_fields_from_doc(text: str) -> dict:
     result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
     result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s*of\s*loading(?:\s*\(pol\))?", r"load(?:ing)?\s*port", r"pol"))
     result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s*of\s*discharge(?:\s*\(pod\))?", r"discharge\s*port", r"pod"))
-    # Prefer the explicit total.  Cargo document tables commonly contain a
-    # "CONTAINER NO. / DESCRIPTION" column header which is not a field value.
-    containers = result["container_count"] or _label_value(text, (r"total\s+containers", r"container\s+count", r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?"))
+    # Prefer an explicit total before looking for a generic container label.
+    # PDF text extraction commonly emits the table heading "CONTAINER NO.",
+    # which is not a value and previously masked the later total line such as
+    # "No. of Containers or Packages: 2 x 20'FCL".
+    total_containers = re.search(
+        r"(?im)^\s*(?:no\.?\s*of\s*containers?(?:\s+or\s+packages?)?|"
+        r"total\s+containers?|container\s+count|containers?)\s*(?::|=|-)?\s*"
+        r"([0-9]{1,3}(?:,[0-9]{3})?)\b",
+        text,
+    )
+    containers = (
+        total_containers.group(1)
+        if total_containers
+        else result["container_count"]
+        or _label_value(text, (r"total\s+containers", r"container\s+count"))
+    )
     weight = result["gross_weight_kg"] or _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if not weight:
         fallback = GROSS_WEIGHT_PATTERN.search(text)
