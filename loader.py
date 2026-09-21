@@ -25,8 +25,41 @@ gave you a ground_truth.json) or POST it to the server's /submit.
 """
 import json
 import os
+import re
 import urllib.request
 from pathlib import Path
+
+
+GROSS_WEIGHT_PATTERN = re.compile(
+    r'(?:Gross\s*We|G\.?W\.?|Berat\s*Kasar|\u6bdb\u91cd)[^\d\n]*?[:=]?\s*'
+    r'([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)', re.I)
+
+
+def extract_two_column_fields(text):
+    """Read shortened English/Malay/Chinese labels from any tabular document text."""
+    prefixes = (
+        ("shipper", ("shipper", "pengirim", "\u53d1\u8d27")),
+        ("consignee", ("consignee", "penerima", "\u6536\u8d27")),
+        ("notify_party", ("notify", "pihak dimaklumkan", "\u901a\u77e5")),
+        ("port_of_loading", ("load", "port of lo", "pol", "pelabuhan memuat", "\u88c5\u8d27")),
+        ("port_of_discharge", ("discharge", "port of dis", "pod", "pelabuhan memunggah", "\u5378\u8d27")),
+        ("container_count", ("no. of c", "no of c", "container", "kontena", "\u7bb1\u6570")),
+        ("gross_weight_kg", ("gross w", "g.w", "gw", "berat kasar", "\u6bdb\u91cd")),
+    )
+    values = {}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in re.split(r"\s*\|\s*|\t+", line)]
+        if len(cells) < 2:
+            match = re.match(r"^\s*(.+?)(?:\s{2,})(.+?)\s*$", line)
+            cells = [match.group(1).strip(), match.group(2).strip()] if match else cells
+        if len(cells) < 2 or not cells[1]:
+            continue
+        key = re.sub(r"[\s\.:;|\-]+$", "", cells[0].lower())
+        for field, aliases in prefixes:
+            if key.startswith(aliases):
+                values[field] = " | ".join(cell for cell in cells[1:] if cell)
+                break
+    return values
 
 
 class Inbox:
@@ -100,3 +133,4 @@ if __name__ == "__main__":
     for a in docs[0]["attachments"]:
         head = inbox.read_text(a)[:60].replace("\n", " ") if a.endswith(".txt") else "(binary)"
         print(f"  {a}: {head}")
+
