@@ -656,9 +656,10 @@ class App(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 
 
-# Vercel's Python runtime discovers a BaseHTTPRequestHandler through this
-# module-level export; the same App class remains the local development server.
-handler = App
+# Vercel discovers a BaseHTTPRequestHandler named ``handler``.  Keeping this
+# as a subclass lets production and local development share every route.
+class handler(App):
+    pass
 
 
 if __name__ == "__main__":
