@@ -2,4 +2,5 @@ pypdf
 python-docx
 openpyxl
 rapidocr-onnxruntime==1.2.3
+PyMuPDF==1.26.5
 
