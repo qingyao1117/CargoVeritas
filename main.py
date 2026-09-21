@@ -1,3 +1,4 @@
+
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from loader import Inbox
+from loader import GROSS_WEIGHT_PATTERN, Inbox, extract_two_column_fields
 
 FIELDS = ("shipper", "consignee", "notify_party", "port_of_loading", "port_of_discharge", "container_count", "gross_weight_kg")
 
@@ -99,29 +100,7 @@ def extract_fields_from_doc(text: str) -> dict:
     label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s+of\s+loading|load(?:ing)?\s+port|pol|port\s+of\s+discharge|discharge\s+port|pod|(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?|container\s+count|total\s+containers|(?:total\s+)?gross\s*(?:weight|wt)"
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
-    def spreadsheet_field(key):
-        """Classify truncated/multilingual labels from any extracted document."""
-        normalized = re.sub(r"[\s\.:;|\-]+$", "", key.strip().lower())
-        if normalized.startswith(("shipper", "pengirim", "\u53d1\u8d27")): return "shipper"
-        if normalized.startswith(("consignee", "penerima", "\u6536\u8d27")): return "consignee"
-        if normalized.startswith(("notify", "pihak dimaklumkan", "\u901a\u77e5")): return "notify_party"
-        if normalized.startswith(("load", "port of lo", "pol", "pelabuhan memuat", "\u88c5\u8d27")): return "port_of_loading"
-        if normalized.startswith(("discharge", "port of dis", "pod", "pelabuhan memunggah", "\u5378\u8d27")): return "port_of_discharge"
-        if normalized.startswith(("no. of c", "no of c", "container", "kontena", "\u7bb1\u6570")): return "container_count"
-        if normalized.startswith(("gross w", "g.w", "gw", "berat kasar", "\u6bdb\u91cd")): return "gross_weight_kg"
-        return None
-    for line in text.splitlines():
-        # Excel/Word tables are normally pipe-delimited, while PDFs and plain
-        # text often retain their columns as tabs or two-or-more spaces.
-        cells = [cell.strip() for cell in re.split(r"\s*\|\s*|\t+", line)]
-        if len(cells) < 2:
-            spaced = re.match(r"^\s*(.+?)(?:\s{2,})(.+?)\s*$", line)
-            cells = [spaced.group(1).strip(), spaced.group(2).strip()] if spaced else cells
-        if len(cells) < 2:
-            continue
-        field = spreadsheet_field(cells[0])
-        if field and cells[1]:
-            result[field] = " | ".join(cell for cell in cells[1:] if cell)
+    result.update(extract_two_column_fields(text))
     result["shipper"] = result["shipper"] or _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
     result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
     result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
@@ -129,6 +108,9 @@ def extract_fields_from_doc(text: str) -> dict:
     result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
     containers = result["container_count"] or _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
     weight = result["gross_weight_kg"] or _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
+    if not weight:
+        fallback = GROSS_WEIGHT_PATTERN.search(text)
+        weight = fallback.group(1) if fallback else None
     if containers:
         number = re.search(r"\d+", containers.replace(",", ""))
         result["container_count"] = int(number.group()) if number else None
@@ -157,6 +139,13 @@ def _primary_entity(value) -> str:
 def _same_entity(left, right) -> bool:
     left, right = _primary_entity(left), _primary_entity(right)
     if not left or not right:
+        return False
+    # Never hide a primary-brand typo behind a broad fuzzy/company match.
+    if left.split()[0] != right.split()[0]:
+        return False
+    def subsidiary(value):
+        return bool(re.search(r"\b(?:middle\s+east|fze|fzc|regional|subsidiary)\b", value))
+    if subsidiary(left) != subsidiary(right):
         return False
     # Entity fields often differ only because one document retains an address.
     return left == right or (min(len(left), len(right)) >= 5 and (left in right or right in left))
@@ -207,6 +196,10 @@ def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
         result.update(status="NEEDS_REVIEW", review_reason="unreadable_document")
         return result
     si_data, bl_data = extract_fields_from_doc(attachment_texts[si_name]), extract_fields_from_doc(attachment_texts[bl_name])
+    for document in (si_data, bl_data):
+        notify = str(document.get("notify_party") or "").upper()
+        if not notify or "SAME AS" in notify:
+            document["notify_party"] = document.get("consignee")
     result.update(si_data=si_data, bl_data=bl_data)
     if any(si_data[field] is None or bl_data[field] is None for field in FIELDS):
         result.update(status="NEEDS_REVIEW", review_reason="unreadable_document")
