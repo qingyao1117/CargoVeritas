@@ -207,7 +207,9 @@ def compare_fields_detailed(si_data: dict, bl_data: dict):
         if field == "container_count":
             si_number, bl_number = _normal_number(si, integer=True), _normal_number(bl, integer=True)
             same = si_number is not None and si_number == bl_number
-            near = si_number is not None and bl_number is not None and abs(si_number - bl_number) == 1
+            # A container is a discrete shipping unit: any count difference is
+            # a document mismatch, including a difference of exactly one.
+            near = False
         elif field == "gross_weight_kg":
             si_number, bl_number = _normal_number(si), _normal_number(bl)
             same = si_number is not None and bl_number is not None and abs(si_number - bl_number) < 0.01
@@ -276,3 +278,4 @@ if __name__ == "__main__":
     inbox = Inbox(".")
     output = {email["email_id"]: inspect_email(email, inbox) for email in inbox}
     Path("submission.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
+
