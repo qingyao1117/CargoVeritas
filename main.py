@@ -1,4 +1,3 @@
-
 """CargoVeritas shipping-document verification pipeline."""
 from __future__ import annotations
 
@@ -42,7 +41,24 @@ def extract_text_from_bytes(raw: bytes, filename: str) -> str:
         if suffix == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(raw), strict=False)
-            return "\n".join(page.extract_text(extraction_mode="layout") or page.extract_text() or "" for page in reader.pages).strip()
+            text = "\n".join(page.extract_text(extraction_mode="layout") or page.extract_text() or "" for page in reader.pages).strip()
+            if text:
+                return text
+            # Some carrier PDFs, including the supplied email_514 documents,
+            # are a scanned page image with no selectable text layer. OCR only
+            # runs for that case; normal text PDFs stay on the fast path above.
+            try:
+                import numpy as np
+                from rapidocr_onnxruntime import RapidOCR
+                engine = RapidOCR()
+                lines = []
+                for page in reader.pages:
+                    for image in page.images:
+                        result, _ = engine(np.asarray(image.image.convert("RGB")))
+                        lines.extend(item[1] for item in (result or []) if len(item) > 1 and item[1])
+                return "\n".join(lines).strip()
+            except Exception:
+                return ""
         if suffix in (".docx", ".doc"):
             import docx
             doc = docx.Document(io.BytesIO(raw))
@@ -97,15 +113,15 @@ def extract_fields_from_doc(text: str) -> dict:
     """Extract exactly the seven mandatory values; unknown values remain null."""
     # Bilingual carrier templates add one or more parenthetical translations to
     # field labels, e.g. "POD (\u5378\u8d27\u6e2f)". Remove label annotations before matching.
-    label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s+of\s+loading|load(?:ing)?\s+port|pol|port\s+of\s+discharge|discharge\s+port|pod|(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?|container\s+count|total\s+containers|(?:total\s+)?gross\s*(?:weight|wt)"
+    label_terms = r"shipper(?:/exporter)?|consignee|notify(?:\s+party)?|port\s*of\s*loading|load(?:ing)?\s*port|pol|port\s*of\s*discharge|discharge\s*port|pod|(?:no\.\s*of\s*)?containers?(?:\s*or\s*packages)?|container\s*count|total\s*containers|(?:total\s*)?gross\s*(?:weight|wt)"
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
     result.update(extract_two_column_fields(text))
     result["shipper"] = result["shipper"] or _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
     result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?",))
     result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
-    result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s+of\s+loading(?:\s*\(pol\))?", r"load(?:ing)?\s+port", r"pol"))
-    result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s+of\s+discharge(?:\s*\(pod\))?", r"discharge\s+port", r"pod"))
+    result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s*of\s*loading(?:\s*\(pol\))?", r"load(?:ing)?\s*port", r"pol"))
+    result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s*of\s*discharge(?:\s*\(pod\))?", r"discharge\s*port", r"pod"))
     containers = result["container_count"] or _label_value(text, (r"(?:no\.\s+of\s+)?containers?(?:\s+or\s+packages)?", r"container\s+count", r"total\s+containers"))
     weight = result["gross_weight_kg"] or _label_value(text, (r"(?:total\s+)?gross\s*(?:weight|wt)(?:\s*\(kgs?\))?",))
     if not weight:
