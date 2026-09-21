@@ -6,6 +6,8 @@ import os
 import re
 import secrets
 import base64
+import hashlib
+import hmac
 import threading
 import time
 from datetime import datetime, timezone
@@ -30,7 +32,6 @@ document.getElementById("vault").onclick=function(){openModal("Audited BOL vault
 document.querySelectorAll("nav button").forEach(function(b){b.onclick=function(){document.querySelector("nav .active").classList.remove("active");this.classList.add("active");var v=this.dataset.view;document.getElementById("title").textContent=v;document.getElementById("subtitle").textContent=v==="Overview"?"Here is your shipping operation at a glance.":"Working view: "+v;if(v==="Inbox intelligence")document.getElementById("inbox").click();if(v==="Verification queue")document.getElementById("review").click();if(v==="Bill of Lading vault")document.getElementById("vault").click();if(v==="Settlement calendar")openModal("Settlement calendar","Payments grouped by expected settlement date.","<div class='item'><div><b>24 Sep · Oceanic Lines</b><small>September freight invoice</small></div><b>$68,400</b></div><div class='item'><div><b>25 Sep · Harbour Link</b><small>Three completed shipments</small></div><b>$74,860</b></div>")}})</script></body></html>"""
 
 
-OAUTH_STATES = set()
 CONNECTED_ACCOUNTS = {}
 PREFERENCES = {"language": "English", "theme": "Transparent mode"}
 AUTH_SESSIONS = {}
@@ -75,7 +76,56 @@ def load_local_env():
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def _base64url(value: bytes) -> str:
+    """Encode opaque OAuth state data without characters unsafe for URLs."""
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _oauth_state_secret() -> bytes:
+    """Use a stable server secret so OAuth state survives Vercel instances."""
+    secret = os.getenv("OAUTH_STATE_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET", "")
+    if not secret:
+        raise RuntimeError("Add GOOGLE_CLIENT_SECRET before connecting Gmail.")
+    return secret.encode("utf-8")
+
+
+def create_oauth_state(redirect_uri: str) -> str:
+    """Create a short-lived signed state value; no per-process storage required."""
+    issued_at = str(int(time.time()))
+    nonce = secrets.token_urlsafe(24)
+    payload = issued_at + "." + nonce
+    signature = hmac.new(
+        _oauth_state_secret(), (payload + "|" + redirect_uri).encode("utf-8"), hashlib.sha256
+    ).digest()
+    return payload + "." + _base64url(signature)
+
+
+def valid_oauth_state(state: str, redirect_uri: str) -> bool:
+    """Validate state integrity and expiry across stateless serverless requests."""
+    try:
+        issued_at, nonce, signature = state.split(".", 2)
+        if not nonce or abs(time.time() - int(issued_at)) > 10 * 60:
+            return False
+        payload = issued_at + "." + nonce
+        expected = _base64url(hmac.new(
+            _oauth_state_secret(), (payload + "|" + redirect_uri).encode("utf-8"), hashlib.sha256
+        ).digest())
+        return hmac.compare_digest(signature, expected)
+    except (TypeError, ValueError):
+        return False
+
+
 class App(BaseHTTPRequestHandler):
+    def _gmail_redirect_uri(self) -> str:
+        """Return the public callback for Vercel, while keeping localhost development."""
+        configured = os.getenv("APP_BASE_URL", "").strip().rstrip("/")
+        if configured:
+            return configured + "/auth/gmail/callback"
+        host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "127.0.0.1:8000").split(",")[0].strip()
+        forwarded_proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+        proto = forwarded_proto or ("http" if host.startswith(("127.0.0.1", "localhost")) else "https")
+        return proto + "://" + host + "/auth/gmail/callback"
+
     def _is_authenticated(self):
         cookies = self.headers.get("Cookie", "")
         session = next((part.strip().split("=", 1)[1] for part in cookies.split(";") if part.strip().startswith("cargoveritas_session=") and "=" in part), "")
@@ -121,14 +171,15 @@ class App(BaseHTTPRequestHandler):
                 return
         if parsed.path == "/auth/gmail":
             client_id = os.getenv("GOOGLE_CLIENT_ID")
-            if not client_id:
+            client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+            if not client_id or not client_secret:
                 self._html("<h1>Gmail is not configured</h1><p>Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the server environment, then restart CargoVeritas.</p><p><a href='/settings'>Open settings</a></p>")
                 return
-            state = secrets.token_urlsafe(32)
-            OAUTH_STATES.add(state)
+            redirect_uri = self._gmail_redirect_uri()
+            state = create_oauth_state(redirect_uri)
             params = {
                 "client_id": client_id,
-                "redirect_uri": "http://127.0.0.1:8000/auth/gmail/callback",
+                "redirect_uri": redirect_uri,
                 "response_type": "code",
                 "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email",
                 "access_type": "offline",
@@ -142,16 +193,16 @@ class App(BaseHTTPRequestHandler):
         if parsed.path == "/auth/gmail/callback":
             query = parse_qs(parsed.query)
             state, code = query.get("state", [""])[0], query.get("code", [""])[0]
-            if state not in OAUTH_STATES or not code:
+            redirect_uri = self._gmail_redirect_uri()
+            if not valid_oauth_state(state, redirect_uri) or not code:
                 self._html("<h1>Gmail connection could not be verified</h1><p>Please return to CargoVeritas and try again.</p>", 400)
                 return
-            OAUTH_STATES.discard(state)
             try:
                 payload = urlencode({
                     "code": code,
                     "client_id": os.environ["GOOGLE_CLIENT_ID"],
                     "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-                    "redirect_uri": "http://127.0.0.1:8000/auth/gmail/callback",
+                    "redirect_uri": redirect_uri,
                     "grant_type": "authorization_code",
                 }).encode()
                 token = json.load(GOOGLE_HTTP.open(Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})))
