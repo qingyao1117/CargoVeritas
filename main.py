@@ -29,6 +29,52 @@ def classify_email(subject: str, body: str, attachment_names=()) -> str:
     return "GENERAL"
 
 
+def _ocr_scanned_pdf(raw: bytes) -> str:
+    """OCR whole PDF pages when a carrier document has no text layer."""
+    try:
+        import fitz
+        import numpy as np
+        from rapidocr_onnxruntime import RapidOCR
+
+        document = fitz.open(stream=raw, filetype="pdf")
+        engine = RapidOCR()
+        lines = []
+        try:
+            for page in document:
+                # Render the complete page. Some scanned PDFs use a page
+                # raster rather than an extractable embedded image, so
+                # pypdf's page.images list is empty even though the page is
+                # visibly readable in Gmail or a browser.
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)
+                if pixmap.n > 3:
+                    image = image[:, :, :3]
+                result, _ = engine(image)
+                lines.extend(item[1] for item in (result or []) if len(item) > 1 and item[1])
+        finally:
+            document.close()
+        return "\n".join(lines).strip()
+    except Exception:
+        return ""
+
+
+def _ocr_embedded_pdf_images(reader) -> str:
+    """OCR images exposed by pypdf when the PDF structure is readable."""
+    try:
+        import numpy as np
+        from rapidocr_onnxruntime import RapidOCR
+
+        engine = RapidOCR()
+        lines = []
+        for page in reader.pages:
+            for image in page.images:
+                result, _ = engine(np.asarray(image.image.convert("RGB")))
+                lines.extend(item[1] for item in (result or []) if len(item) > 1 and item[1])
+        return "\n".join(lines).strip()
+    except Exception:
+        return ""
+
+
 def extract_text_from_bytes(raw: bytes, filename: str) -> str:
     """Extract readable content from common logistics attachment formats."""
     suffix = Path(filename).suffix.lower()
@@ -40,25 +86,16 @@ def extract_text_from_bytes(raw: bytes, filename: str) -> str:
                 return raw.decode("latin-1", errors="ignore")
         if suffix == ".pdf":
             from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(raw), strict=False)
-            text = "\n".join(page.extract_text(extraction_mode="layout") or page.extract_text() or "" for page in reader.pages).strip()
+            try:
+                reader = PdfReader(io.BytesIO(raw), strict=False)
+                text = "\n".join(page.extract_text(extraction_mode="layout") or page.extract_text() or "" for page in reader.pages).strip()
+            except Exception:
+                # Some scanner exports have a malformed or sparse PDF object
+                # table but can still be rendered by PyMuPDF for OCR.
+                return _ocr_scanned_pdf(raw)
             if text:
                 return text
-            # Some carrier PDFs, including the supplied email_514 documents,
-            # are a scanned page image with no selectable text layer. OCR only
-            # runs for that case; normal text PDFs stay on the fast path above.
-            try:
-                import numpy as np
-                from rapidocr_onnxruntime import RapidOCR
-                engine = RapidOCR()
-                lines = []
-                for page in reader.pages:
-                    for image in page.images:
-                        result, _ = engine(np.asarray(image.image.convert("RGB")))
-                        lines.extend(item[1] for item in (result or []) if len(item) > 1 and item[1])
-                return "\n".join(lines).strip()
-            except Exception:
-                return ""
+            return _ocr_embedded_pdf_images(reader) or _ocr_scanned_pdf(raw)
         if suffix in (".docx", ".doc"):
             import docx
             doc = docx.Document(io.BytesIO(raw))
