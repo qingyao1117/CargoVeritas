@@ -420,7 +420,7 @@ class App(BaseHTTPRequestHandler):
                     raw = self._gmail_attachment_bytes(message["id"], part.get("body", {}), token)
                     text = extract_text_from_bytes(raw, filename)
                     attachment_texts[filename] = text
-                    attachment_summary.append({"filename": filename, "mime_type": mime, "readable": bool(text.strip())})
+                    attachment_summary.append({"filename": filename, "mime_type": mime, "bytes": len(raw), "readable": bool(text.strip())})
             body = "\n".join(body_chunks) or message.get("snippet", "")
             processed = process_email({"subject": subject, "body": body}, attachment_texts)
             records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "body_snippet": body, "received_at": received, "classification": processed["category"], "processing_status": processed["status"], "category": processed["category"], "status": processed["status"], "review_reason": processed["review_reason"], "defect_fields": processed["defect_fields"], "si_data": processed["si_data"], "bl_data": processed["bl_data"], "attachment_summary": attachment_summary, "extraction": {"source": "gmail_documents", "category": processed["category"]}})
@@ -454,7 +454,7 @@ class App(BaseHTTPRequestHandler):
                 raw = self._gmail_attachment_bytes(message_id, part.get("body", {}), token)
                 text = extract_text_from_bytes(raw, filename)
                 attachment_texts[filename] = text
-                attachment_summary.append({"filename": filename, "mime_type": mime, "readable": bool(text.strip())})
+                attachment_summary.append({"filename": filename, "mime_type": mime, "bytes": len(raw), "readable": bool(text.strip())})
         body = "\n".join(body_chunks) or message.get("snippet", "")
         processed = process_email({"subject": headers.get("subject", "(no subject)"), "body": body}, attachment_texts)
         self._supabase_json("/rest/v1/gmail_messages?gmail_message_id=eq." + quote(message_id, safe=""), "PATCH", {
