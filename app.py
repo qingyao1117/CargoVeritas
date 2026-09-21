@@ -122,6 +122,11 @@ class App(BaseHTTPRequestHandler):
         if configured:
             return configured + "/auth/gmail/callback"
         host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "127.0.0.1:8000").split(",")[0].strip()
+        # Vercel's generated deployment host changes on every deploy. Google
+        # requires an exact pre-registered URI, so use the stable production
+        # domain unless APP_BASE_URL has deliberately overridden it.
+        if host.endswith(".vercel.app"):
+            return "https://cargo-veritas.vercel.app/auth/gmail/callback"
         forwarded_proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
         proto = forwarded_proto or ("http" if host.startswith(("127.0.0.1", "localhost")) else "https")
         return proto + "://" + host + "/auth/gmail/callback"
