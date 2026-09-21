@@ -14,7 +14,7 @@ from io import BytesIO
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
-from main import FIELDS, extract_text_from_bytes, process_email
+from main import FIELDS, compare_fields_detailed, extract_text_from_bytes, process_email
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -450,7 +450,7 @@ class App(BaseHTTPRequestHandler):
                 lines.append(current)
             return lines or ["N/A"]
         si, bl = record.get("si_data") or {}, record.get("bl_data") or {}
-        defects = set(record.get("defect_fields") or [])
+        defects, minor_differences = (set(values) for values in compare_fields_detailed(si, bl))
         labels = {"shipper": "Shipper", "consignee": "Consignee", "notify_party": "Notify Party", "port_of_loading": "Port of Loading (POL)", "port_of_discharge": "Port of Discharge (POD)", "container_count": "Container Count", "gross_weight_kg": "Gross Weight (kg)"}
         state_map = {"OK": ("PASSED / OK", "0.086 0.639 0.290"), "MISMATCH": ("DISCREPANCY DETECTED", "0.863 0.149 0.149"), "NEEDS_REVIEW": ("HUMAN REVIEW REQUIRED", "0.843 0.467 0.024")}
         state_text, state_color = state_map.get(record.get("status"), ("HUMAN REVIEW REQUIRED", "0.843 0.467 0.024"))
@@ -474,7 +474,7 @@ class App(BaseHTTPRequestHandler):
         current_y = y
         for index, field in enumerate(FIELDS):
             valid = si.get(field) not in (None, "") and bl.get(field) not in (None, "")
-            outcome = "N/A" if not valid else "MISMATCH" if field in defects else "MATCH"
+            outcome = "N/A" if not valid else "MISMATCH" if field in defects else "HUMAN REVIEW" if field in minor_differences else "MATCH"
             cell_lines = (wrapped(labels[field], 19), wrapped(si.get(field), 27), wrapped(bl.get(field), 27))
             dynamic_height = max(max(len(lines) for lines in cell_lines) * 10 + 14, row_height)
             row_y = current_y - dynamic_height
@@ -489,6 +489,9 @@ class App(BaseHTTPRequestHandler):
             if outcome == "MISMATCH":
                 rect(commands, cursor + 6, row_y + dynamic_height - 26, 92, 17, "0.937 0.267 0.267")
                 text(commands, cursor + 12, row_y + dynamic_height - 21, outcome, 7, "1 1 1", True)
+            elif outcome == "HUMAN REVIEW":
+                rect(commands, cursor + 6, row_y + dynamic_height - 26, 92, 17, "0.843 0.467 0.024")
+                text(commands, cursor + 11, row_y + dynamic_height - 21, outcome, 7, "1 1 1", True)
             elif outcome == "MATCH":
                 text(commands, cursor + 8, row_y + dynamic_height - 14, outcome, 8, "0.086 0.639 0.290", True)
             else:
@@ -595,7 +598,14 @@ class App(BaseHTTPRequestHandler):
             if row.get("status") == "NEEDS_REVIEW":
                 reason = reason_labels.get(row.get("review_reason"), (row.get("review_reason") or "Document Could Not Be Verified").replace("_", " ").title())
                 return "<div class='email'><h3>" + escape(row.get("subject") or "Document review") + "</h3><div class='warning-banner'><b>Escalation Reason: " + escape(reason) + "</b></div><p>" + escape(row.get("body_snippet") or row.get("snippet") or "No email body available.") + "</p>" + actions + "</div>"
-            rows = "".join("<tr" + (" class='alert'" if field in (row.get("defect_fields") or []) else "") + "><td>" + field_labels[field] + "</td><td>" + escape(str((row.get("si_data") or {}).get(field) or "—")) + "</td><td>" + escape(str((row.get("bl_data") or {}).get(field) or "—")) + "</td><td>" + ("<span class='discrepancy-badge'>Discrepancy Detected</span>" if field in (row.get("defect_fields") or []) else "<span class='match-badge'>Match</span>") + "</td></tr>" for field in FIELDS)
+            mismatches, minor_differences = (set(values) for values in compare_fields_detailed(row.get("si_data") or {}, row.get("bl_data") or {}))
+            def field_outcome(field):
+                if field in mismatches:
+                    return "<span class='discrepancy-badge'>Discrepancy Detected</span>"
+                if field in minor_differences:
+                    return "<span class='warning-banner'>Human Review</span>"
+                return "<span class='match-badge'>Match</span>"
+            rows = "".join("<tr" + (" class='alert'" if field in mismatches else "") + "><td>" + field_labels[field] + "</td><td>" + escape(str((row.get("si_data") or {}).get(field) or "—")) + "</td><td>" + escape(str((row.get("bl_data") or {}).get(field) or "—")) + "</td><td>" + field_outcome(field) + "</td></tr>" for field in FIELDS)
             return "<div class='email'><h3>" + escape(row.get("subject") or "BL comparison") + "</h3><table><tr><th>Field Name</th><th>Shipping Instruction (SI)</th><th>Draft Bill of Lading (BL)</th><th>Status</th></tr>" + rows + "</table>" + actions + "</div>"
         review_cards = "".join(review_card(row) for row in review_rows) or "<p>No MISMATCH or NEEDS_REVIEW records are awaiting action.</p>"
         tab_specs = [("ALL", "All")] + [(category, category_meta[category][0]) for category in category_meta]
