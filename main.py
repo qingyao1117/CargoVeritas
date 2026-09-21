@@ -10,6 +10,7 @@ from pathlib import Path
 from loader import GROSS_WEIGHT_PATTERN, Inbox, extract_two_column_fields
 
 FIELDS = ("shipper", "consignee", "notify_party", "port_of_loading", "port_of_discharge", "container_count", "gross_weight_kg")
+_OCR_ENGINE = None
 
 
 def classify_email(subject: str, body: str, attachment_names=()) -> str:
@@ -29,15 +30,23 @@ def classify_email(subject: str, body: str, attachment_names=()) -> str:
     return "GENERAL"
 
 
+def _get_ocr_engine():
+    """Reuse the loaded OCR models across attachments in a warm function."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        from rapidocr_onnxruntime import RapidOCR
+        _OCR_ENGINE = RapidOCR()
+    return _OCR_ENGINE
+
+
 def _ocr_scanned_pdf(raw: bytes) -> str:
     """OCR whole PDF pages when a carrier document has no text layer."""
     try:
         import fitz
         import numpy as np
-        from rapidocr_onnxruntime import RapidOCR
 
         document = fitz.open(stream=raw, filetype="pdf")
-        engine = RapidOCR()
+        engine = _get_ocr_engine()
         lines = []
         try:
             for page in document:
@@ -54,7 +63,8 @@ def _ocr_scanned_pdf(raw: bytes) -> str:
         finally:
             document.close()
         return "\n".join(lines).strip()
-    except Exception:
+    except Exception as error:
+        print("Scanned PDF page OCR failed:", type(error).__name__)
         return ""
 
 
@@ -62,16 +72,15 @@ def _ocr_embedded_pdf_images(reader) -> str:
     """OCR images exposed by pypdf when the PDF structure is readable."""
     try:
         import numpy as np
-        from rapidocr_onnxruntime import RapidOCR
-
-        engine = RapidOCR()
+        engine = _get_ocr_engine()
         lines = []
         for page in reader.pages:
             for image in page.images:
                 result, _ = engine(np.asarray(image.image.convert("RGB")))
                 lines.extend(item[1] for item in (result or []) if len(item) > 1 and item[1])
         return "\n".join(lines).strip()
-    except Exception:
+    except Exception as error:
+        print("Embedded PDF image OCR failed:", type(error).__name__)
         return ""
 
 
