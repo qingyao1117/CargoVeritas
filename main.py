@@ -103,7 +103,7 @@ def _label_value(text: str, labels) -> str | None:
     for label in labels:
         # PDFs preserve label/value columns as multiple spaces; Word and Excel
         # tables arrive as pipe-delimited text after extraction.
-        match = re.search(r"(?im)^\s*" + label + r"(?:\s*(?::|\-|\|)\s*|\s+)(.+?)\s*$", text)
+        match = re.search(r"(?im)^\s*" + label + r"(?:\s*(?::|\-|\||\.)\s*|\s+)(.+?)\s*$", text)
         if match:
             return match.group(1).strip(" |\t")
     return None
@@ -133,8 +133,7 @@ def extract_fields_from_doc(text: str) -> dict:
         number = re.search(r"\d+", containers.replace(",", ""))
         result["container_count"] = int(number.group()) if number else None
     if weight:
-        number = re.search(r"\d[\d,]*(?:\.\d+)?", weight)
-        result["gross_weight_kg"] = float(number.group().replace(",", "")) if number else None
+        result["gross_weight_kg"] = _normal_number(weight)
     return result
 
 
@@ -173,7 +172,14 @@ def _normal_number(value, *, integer=False):
     match = re.search(r"\d[\d,\s]*(?:\.\d+)?", str(value or ""))
     if not match:
         return None
-    number = float(re.sub(r"[,\s]", "", match.group()))
+    token = re.sub(r"\s", "", match.group())
+    # A single three-digit group after a comma or period is a thousands
+    # separator in carrier weight documents: 22.825 means 22,825 kilograms.
+    if re.fullmatch(r"\d{1,3}(?:[,.]\d{3})+", token):
+        token = token.replace(",", "").replace(".", "")
+    else:
+        token = token.replace(",", "")
+    number = float(token)
     return int(number) if integer else number
 
 
