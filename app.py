@@ -287,6 +287,27 @@ class App(BaseHTTPRequestHandler):
             return b""
         return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
 
+    def _gmail_message_body(self, message_id):
+        """Read the original Gmail text when an Inbox inspection is opened."""
+        if not CONNECTED_ACCOUNTS or not message_id:
+            return ""
+        _, token = next(iter(CONNECTED_ACCOUNTS.items()))
+        message = json.load(GOOGLE_HTTP.open(Request(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + quote(message_id, safe="") + "?format=full",
+            headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
+        parts = self._gmail_parts(message.get("payload", {}))
+        chunks = []
+        for part in parts:
+            if part.get("mimeType") not in ("text/plain", "text/html"):
+                continue
+            raw = self._gmail_attachment_bytes(message_id, part.get("body", {}), token)
+            text = raw.decode("utf-8", errors="replace")
+            if part.get("mimeType") == "text/html":
+                text = re.sub(r"<[^>]+>", " ", text)
+            if text.strip():
+                chunks.append(text.strip())
+        return "\n\n".join(chunks)
+
     def _sync_gmail_to_supabase(self):
         if not CONNECTED_ACCOUNTS:
             raise RuntimeError("Connect a Gmail account first, then return here to sync it.")
@@ -325,8 +346,9 @@ class App(BaseHTTPRequestHandler):
             attachment_texts, attachment_summary, body_chunks = {}, [], []
             for part in parts:
                 mime, filename = part.get("mimeType", ""), part.get("filename", "")
-                if mime == "text/plain" and part.get("body", {}).get("data"):
-                    body_chunks.append(self._gmail_attachment_bytes(message["id"], part["body"], token).decode("utf-8", errors="replace"))
+                if mime in ("text/plain", "text/html") and part.get("body", {}).get("data"):
+                    text = self._gmail_attachment_bytes(message["id"], part["body"], token).decode("utf-8", errors="replace")
+                    body_chunks.append(re.sub(r"<[^>]+>", " ", text) if mime == "text/html" else text)
                 if filename:
                     raw = self._gmail_attachment_bytes(message["id"], part.get("body", {}), token)
                     text = extract_text_from_bytes(raw, filename)
@@ -334,7 +356,7 @@ class App(BaseHTTPRequestHandler):
                     attachment_summary.append({"filename": filename, "mime_type": mime, "readable": bool(text.strip())})
             body = "\n".join(body_chunks) or message.get("snippet", "")
             processed = process_email({"subject": subject, "body": body}, attachment_texts)
-            records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "body_snippet": body[:4000], "received_at": received, "classification": processed["category"], "processing_status": processed["status"], "category": processed["category"], "status": processed["status"], "review_reason": processed["review_reason"], "defect_fields": processed["defect_fields"], "si_data": processed["si_data"], "bl_data": processed["bl_data"], "attachment_summary": attachment_summary, "extraction": {"source": "gmail_documents", "category": processed["category"]}})
+            records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "body_snippet": body, "received_at": received, "classification": processed["category"], "processing_status": processed["status"], "category": processed["category"], "status": processed["status"], "review_reason": processed["review_reason"], "defect_fields": processed["defect_fields"], "si_data": processed["si_data"], "bl_data": processed["bl_data"], "attachment_summary": attachment_summary, "extraction": {"source": "gmail_documents", "category": processed["category"]}})
         if records:
             self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records, "resolution=ignore-duplicates,return=minimal")
         return {"account": account, "processed": len(records)}
@@ -487,7 +509,9 @@ class App(BaseHTTPRequestHandler):
             return status_labels.get(status, (status or "Pending").replace("_", " ").title())
         def category_badge(row):
             label, subtitle, css = category_meta[category_for(row)]
-            return "<span class='category-badge " + css + "'>" + label + "</span><small class='category-routing'>" + subtitle + "</small>"
+            item_id = quote(row.get("gmail_message_id") or "", safe="")
+            href = "/app/inbox-intelligence?category=" + quote(selected_category) + "&email=" + item_id
+            return "<a href='" + href + "' class='category-badge " + css + "'>" + label + "</a><small class='category-routing'>" + subtitle + "</small>"
         selected_category = query.get("category", ["ALL"])[0]
         if selected_category not in category_meta:
             selected_category = "ALL"
@@ -531,7 +555,12 @@ class App(BaseHTTPRequestHandler):
         email_drawer = ""
         if inspected:
             close_url = "/app/inbox-intelligence?category=" + quote(selected_category)
-            email_drawer = "<div class='drawer-backdrop'><aside class='email-drawer'><a class='drawer-close' href='" + close_url + "'>×</a><h2>Email inspection</h2><p><b>From:</b> " + escape(inspected.get("sender") or "Unknown sender") + "</p><p><b>Subject:</b> " + escape(inspected.get("subject") or "(no subject)") + "</p><p><b>Timestamp:</b> " + escape((inspected.get("received_at") or "").replace("T", " ")) + "</p><p>" + category_badge(inspected) + "</p><div class='routing-explainer'><b>Automated routing rationale</b><br>" + routing_reason(inspected) + "</div><h3>Full email body</h3><pre>" + escape(inspected.get("body_snippet") or inspected.get("snippet") or "No body content was available.") + "</pre></aside></div>"
+            try:
+                full_body = self._gmail_message_body(inspected.get("gmail_message_id"))
+            except Exception as error:
+                print("Gmail inspection fetch skipped:", type(error).__name__)
+                full_body = ""
+            email_drawer = "<div class='drawer-backdrop'><aside class='email-drawer'><a class='drawer-close' href='" + close_url + "'>×</a><h2>Email inspection</h2><p><b>From:</b> " + escape(inspected.get("sender") or "Unknown sender") + "</p><p><b>Subject:</b> " + escape(inspected.get("subject") or "(no subject)") + "</p><p><b>Timestamp:</b> " + escape((inspected.get("received_at") or "").replace("T", " ")) + "</p><p>" + category_badge(inspected) + "</p><div class='routing-explainer'><b>Automated routing rationale</b><br>" + routing_reason(inspected) + "</div><h3>Full email body</h3><pre>" + escape(full_body or inspected.get("body_snippet") or inspected.get("snippet") or "No body content was available.") + "</pre></aside></div>"
         language_options = "".join("<option" + (" selected" if PREFERENCES["language"] == value else "") + ">" + value + "</option>" for value in ("English", "Bahasa Melayu", "Chinese"))
         theme_options = "".join("<option" + (" selected" if PREFERENCES["theme"] == value else "") + ">" + value + "</option>" for value in ("Transparent mode", "Solid mode"))
         save_confirmation = "<p class='notice'>Preferences saved. Language: " + escape(PREFERENCES["language"]) + "; appearance: " + escape(PREFERENCES["theme"]) + ".</p>" if query.get("saved") else ""
