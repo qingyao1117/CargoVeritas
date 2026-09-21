@@ -150,14 +150,14 @@ def extract_fields_from_doc(text: str) -> dict:
     """Extract exactly the seven mandatory values; unknown values remain null."""
     # Bilingual carrier templates add one or more parenthetical translations to
     # field labels, e.g. "POD (\u5378\u8d27\u6e2f)". Remove label annotations before matching.
-    label_terms = r"shipper(?:/exporter)?|consignee|to\s+the\s+order\s+of|notify(?:\s+party)?|port\s*of\s*loading|load(?:ing)?\s*port|pol|port\s*of\s*discharge|discharge\s*port|pod|(?:no\.\s*of\s*)?containers?(?:\s*or\s*packages)?|container\s*count|total\s*containers|(?:total\s*)?gross\s*(?:weight|wt)"
+    label_terms = r"shipper(?:/exporter)?|consignee|to\s+the\s+order\s+of|notify(?:\s+party)?|port\s*of\s*lo[ao]ding|load(?:ing)?\s*port|pol|port\s*of\s*discharge|discharge\s*port|pod|(?:no\.\s*of\s*)?containers?(?:\s*or\s*packages)?|container\s*count|total\s*containers|(?:total\s*)?gross\s*(?:weight|wt)"
     text = re.sub(r"(?im)(" + label_terms + r")(?:\s*[\(\uff08][^\)\uff09]*[\)\uff09])+", r"\1", text)
     result = {field: None for field in FIELDS}
     result.update(extract_two_column_fields(text))
     result["shipper"] = result["shipper"] or _label_value(text, (r"shipper(?:/exporter)?(?:\s*\([^)]*\))?",))
     result["consignee"] = result["consignee"] or _label_value(text, (r"consignee(?:\s*\([^)]*\))?", r"to\s+the\s+order\s+of"))
     result["notify_party"] = result["notify_party"] or _label_value(text, (r"notify(?:\s+party)?",))
-    result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s*of\s*loading(?:\s*\(pol\))?", r"load(?:ing)?\s*port", r"pol"))
+    result["port_of_loading"] = result["port_of_loading"] or _label_value(text, (r"port\s*of\s*lo[ao]ding(?:\s*\(pol\))?", r"load(?:ing)?\s*port", r"pol"))
     result["port_of_discharge"] = result["port_of_discharge"] or _label_value(text, (r"port\s*of\s*discharge(?:\s*\(pod\))?", r"discharge\s*port", r"pod"))
     # Prefer an explicit total before looking for a generic container label.
     # PDF text extraction commonly emits the table heading "CONTAINER NO.",
@@ -200,6 +200,10 @@ def _normal_port(value) -> str:
 def _primary_entity(value) -> str:
     """Return the primary company name, without trailing address details."""
     first = re.split(r"[|;\r\n]", str(value or ""), maxsplit=1)[0]
+    # OCR and carrier templates sometimes retain the alternate field label in
+    # the value column, e.g. "Party/Intermediate Consignee: ACME LTD".
+    first = re.sub(r"(?i)^\s*(?:notify\s+)?party\s*/\s*intermediate\s+consignee\s*:\s*", "", first)
+    first = re.sub(r"(?i)^\s*intermediate\s+consignee\s*:\s*", "", first)
     return _normal_text(first)
 
 
@@ -215,7 +219,12 @@ def _same_entity(left, right) -> bool:
     if subsidiary(left) != subsidiary(right):
         return False
     # Entity fields often differ only because one document retains an address.
-    return left == right or (min(len(left), len(right)) >= 5 and (left in right or right in left))
+    compact_left, compact_right = left.replace(" ", ""), right.replace(" ", "")
+    return (
+        left == right
+        or compact_left == compact_right
+        or (min(len(left), len(right)) >= 5 and (left in right or right in left))
+    )
 
 
 def _normal_number(value, *, integer=False):
