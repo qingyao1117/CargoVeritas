@@ -656,7 +656,13 @@ class App(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 
 
+# Vercel's Python runtime discovers a BaseHTTPRequestHandler through this
+# module-level export; the same App class remains the local development server.
+handler = App
+
+
 if __name__ == "__main__":
     load_local_env()
     print("CargoVeritas running at http://127.0.0.1:8000")
     ThreadingHTTPServer(("127.0.0.1", 8000), App).serve_forever()
+
