@@ -257,14 +257,14 @@ class App(BaseHTTPRequestHandler):
             raise RuntimeError("Add SUPABASE_SECRET_KEY to .env. Use the Supabase secret/service-role key, not the publishable key.")
         return url.rstrip("/"), key
 
-    def _supabase_json(self, path, method="GET", payload=None):
+    def _supabase_json(self, path, method="GET", payload=None, prefer="resolution=merge-duplicates,return=minimal"):
         url, key = self._supabase_credentials()
         headers = {"apikey": key, "Authorization": "Bearer " + key}
         data = None
         if payload is not None:
             data = json.dumps(payload).encode()
             headers["Content-Type"] = "application/json"
-            headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+            headers["Prefer"] = prefer
         request = Request(url + path, data=data, headers=headers, method=method)
         response = GOOGLE_HTTP.open(request, timeout=20)
         raw = response.read()
@@ -291,11 +291,29 @@ class App(BaseHTTPRequestHandler):
         if not CONNECTED_ACCOUNTS:
             raise RuntimeError("Connect a Gmail account first, then return here to sync it.")
         account, token = next(iter(CONNECTED_ACCOUNTS.items()))
+        latest = self._supabase_json("/rest/v1/gmail_messages?select=received_at&order=received_at.desc&limit=1")
+        query = ""
+        if latest and latest[0].get("received_at"):
+            try:
+                latest_time = datetime.fromisoformat(latest[0]["received_at"].replace("Z", "+00:00")).timestamp()
+                query = "after:" + str(max(0, int(latest_time) - 1))
+            except (TypeError, ValueError):
+                query = ""
+        listing_params = {"maxResults": "100", "labelIds": "INBOX"}
+        if query:
+            listing_params["q"] = query
         listing = json.load(GOOGLE_HTTP.open(Request(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=15&labelIds=INBOX",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + urlencode(listing_params),
             headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
+        listed_ids = [item.get("id") for item in listing.get("messages", []) if item.get("id")]
+        existing_ids = set()
+        if listed_ids:
+            existing = self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id&gmail_message_id=in." + quote("(" + ",".join(listed_ids) + ")", safe="(),"))
+            existing_ids = {row.get("gmail_message_id") for row in existing}
         records = []
         for item in listing.get("messages", []):
+            if item.get("id") in existing_ids:
+                continue
             message = json.load(GOOGLE_HTTP.open(Request(
                 "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + item["id"] + "?format=full",
                 headers={"Authorization": "Bearer " + token["access_token"]}), timeout=20))
@@ -318,7 +336,7 @@ class App(BaseHTTPRequestHandler):
             processed = process_email({"subject": subject, "body": body}, attachment_texts)
             records.append({"gmail_message_id": message["id"], "gmail_thread_id": message.get("threadId"), "sender": headers.get("from", ""), "subject": subject, "snippet": message.get("snippet", ""), "body_snippet": body[:4000], "received_at": received, "classification": processed["category"], "processing_status": processed["status"], "category": processed["category"], "status": processed["status"], "review_reason": processed["review_reason"], "defect_fields": processed["defect_fields"], "si_data": processed["si_data"], "bl_data": processed["bl_data"], "attachment_summary": attachment_summary, "extraction": {"source": "gmail_documents", "category": processed["category"]}})
         if records:
-            self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records)
+            self._supabase_json("/rest/v1/gmail_messages?on_conflict=gmail_message_id", "POST", records, "resolution=ignore-duplicates,return=minimal")
         return {"account": account, "processed": len(records)}
 
     def _bol_record(self, bol_ref):
@@ -434,9 +452,20 @@ class App(BaseHTTPRequestHandler):
 
     def _recent_gmail_messages(self):
         try:
-            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=15")
+            return self._supabase_json("/rest/v1/gmail_messages?select=gmail_message_id,sender,subject,snippet,body_snippet,category,status,defect_fields,si_data,bl_data,review_reason,attachment_summary,received_at&order=received_at.desc&limit=100")
         except Exception:
             return []
+
+    def _gmail_message_count(self):
+        try:
+            url, key = self._supabase_credentials()
+            request = Request(url + "/rest/v1/gmail_messages?select=gmail_message_id", headers={"apikey": key, "Authorization": "Bearer " + key, "Prefer": "count=exact", "Range": "0-0"})
+            response = GOOGLE_HTTP.open(request, timeout=20)
+            total = response.headers.get("Content-Range", "").rsplit("/", 1)[-1]
+            return int(total) if total.isdigit() else 0
+        except Exception:
+            return 0
+
     def _workspace(self, section, query):
         slug = section.lower().replace(" ", "-")
         if section == "Settings":
@@ -484,7 +513,7 @@ class App(BaseHTTPRequestHandler):
         comparisons = [row for row in inbox_rows if category_for(row) == "BL_COMPARISON"]
         straight_through = sum(1 for row in comparisons if row.get("status") == "OK")
         stp_rate = round((straight_through / len(comparisons) * 100) if comparisons else 0)
-        overview_cards = "<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>" + str(len(shipping_rows)) + "</b><small>Bill of Lading comparisons</small></article><article><small>EMAILS PROCESSED</small><b>" + str(len(inbox_rows)) + "</b><small>matches category breakdown</small></article><article><small>HUMAN REVIEW</small><b>" + str(len(review_rows)) + "</b><small>documents awaiting a decision</small></article><article><small>STRAIGHT-THROUGH RATE</small><b>" + str(straight_through) + " / " + str(len(comparisons)) + "</b><small>" + str(stp_rate) + "% passed all 7 fields</small></article></div>"
+        overview_cards = "<div class='grid cards'><article><small>ACTIVE SHIPMENTS</small><b>" + str(len(shipping_rows)) + "</b><small>Bill of Lading comparisons</small></article><article><small>EMAILS PROCESSED</small><b>" + str(self._gmail_message_count() or len(inbox_rows)) + "</b><small>matches category breakdown</small></article><article><small>HUMAN REVIEW</small><b>" + str(len(review_rows)) + "</b><small>documents awaiting a decision</small></article><article><small>STRAIGHT-THROUGH RATE</small><b>" + str(straight_through) + " / " + str(len(comparisons)) + "</b><small>" + str(stp_rate) + "% passed all 7 fields</small></article></div>"
         category_breakdown = "<section><h2>Email Classification Breakdown</h2><div class='category-grid'>" + "".join("<a class='category-card " + category_meta[category][2] + "' href='/app/inbox-intelligence?category=" + category + "'><span class='category-badge " + category_meta[category][2] + "'>" + category_meta[category][0] + "</span><small>" + category_meta[category][1] + "</small><b>" + str(count) + "</b></a>" for category, count in category_counts.items()) + "</div></section>"
         def review_card(row):
             item_id = quote(row.get("gmail_message_id") or "", safe="")
