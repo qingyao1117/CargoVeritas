@@ -39,7 +39,7 @@ def extract_two_column_fields(text):
     """Read shortened English/Malay/Chinese labels from any tabular document text."""
     prefixes = (
         ("shipper", ("shipper", "pengirim", "\u53d1\u8d27")),
-        ("consignee", ("consignee", "penerima", "\u6536\u8d27")),
+        ("consignee", ("consignee", "to the order of", "penerima", "\u6536\u8d27")),
         ("notify_party", ("notify", "pihak dimaklumkan", "\u901a\u77e5")),
         ("port_of_loading", ("load", "port of lo", "pol", "pelabuhan memuat", "\u88c5\u8d27")),
         ("port_of_discharge", ("discharge", "port of dis", "pod", "pelabuhan memunggah", "\u5378\u8d27")),
@@ -57,7 +57,10 @@ def extract_two_column_fields(text):
         key = re.sub(r"[\s\.:;|\-]+$", "", cells[0].lower())
         for field, aliases in prefixes:
             if key.startswith(aliases):
-                values[field] = " | ".join(cell for cell in cells[1:] if cell)
+                value = " | ".join(cell for cell in cells[1:] if cell)
+                if field in ("container_count", "gross_weight_kg") and not re.search(r"\d", value):
+                    continue
+                values[field] = value
                 break
     return values
 
@@ -133,4 +136,3 @@ if __name__ == "__main__":
     for a in docs[0]["attachments"]:
         head = inbox.read_text(a)[:60].replace("\n", " ") if a.endswith(".txt") else "(binary)"
         print(f"  {a}: {head}")
-
