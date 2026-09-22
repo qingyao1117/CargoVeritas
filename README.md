@@ -19,17 +19,17 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 11. Team & License
 
 **✨ Key Features** <br />
-**- Inbox Intelligence Engine:** Synchronizes operational inboxes and categorizes incoming messages into 5 clear buckets (Bill of Lading Comparison, Shipping Instruction Request, Invoice Query, General Update, Spam). <br />
-**- Automated 7-Field Cross-Alignment:** Compares Shipper, Consignee, Notify Party, Port of Loading, Port of Discharge, Container Count, and Gross Weight (kg) side-by-side in ~3 seconds. <br />
-**- Deterministic Zero-Hallucination Extraction:** OpenAI API runtime extraction with strict JSON Schema output mode and zero temperature ($T = 0.0$), eliminating false mismatches from synonymous carrier terminology (e.g., "Load Port" vs "Port of Loading").<br />
-**- Human-in-the-Loop Escalation:** Automatically flags unreadable scans, corrupt attachments, or discrepancies to an operator review queue with 1-click actions (Approve Discrepancy, Reject to Carrier, or Request Amended Docs). <br />
-**- Enterprise Persistence & Auditability:** Secure document storage and tamper-evident relational logs powered by Supabase with Row-Level Security (RLS). <br />
+**1. Inbox Intelligence Engine:** Synchronizes operational inboxes and categorizes incoming messages into 5 clear buckets (Bill of Lading Comparison, Shipping Instruction Request, Invoice Query, General Update, Spam). <br />
+**2. Automated 7-Field Cross-Alignment:** Compares Shipper, Consignee, Notify Party, Port of Loading, Port of Discharge, Container Count, and Gross Weight (kg) side-by-side in ~3 seconds. <br />
+**3. Deterministic Zero-Hallucination Extraction:** OpenAI API runtime extraction with strict JSON Schema output mode and zero temperature ($T = 0.0$), eliminating false mismatches from synonymous carrier terminology (e.g., "Load Port" vs "Port of Loading").<br />
+**4. Human-in-the-Loop Escalation:** Automatically flags unreadable scans, corrupt attachments, or discrepancies to an operator review queue with 1-click actions (Approve Discrepancy, Reject to Carrier, or Request Amended Docs). <br />
+**5. Enterprise Persistence & Auditability:** Secure document storage and tamper-evident relational logs powered by Supabase with Row-Level Security (RLS). <br />
 
 **🛠 Tech Stack** <br />
-**- Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS <br />
-**- Authentication & Backend:** Supabase (PostgreSQL, Object Storage, Row-Level Security) <br />
-**- AI & Prompting Engine:** OpenAI API (gpt-4o / gpt-4o-mini with structured JSON mode), Google Gemini (Prompt Engineering) <br />
-**- Mailbox & Cloud Infrastructure:** Google Cloud Platform (Gmail API, OAuth 2.0), Vercel <br />
+**1. Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS <br />
+**2. Authentication & Backend:** Supabase (PostgreSQL, Object Storage, Row-Level Security) <br />
+**3. AI & Prompting Engine:** OpenAI API (gpt-4o / gpt-4o-mini with structured JSON mode), Google Gemini (Prompt Engineering) <br />
+**4. Mailbox & Cloud Infrastructure:** Google Cloud Platform (Gmail API, OAuth 2.0), Vercel <br />
 
 **📋 Prerequisites** <br />
 Before getting started, make sure you have the following installed and configured: <br />
