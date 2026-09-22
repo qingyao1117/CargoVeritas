@@ -1,23 +1,28 @@
-**🚢 CargoVeritas — Automated Shipping Document Verification** <br />
-**Averis x Monash Hackathon 2026** <br />
-**Team: AppleCat** <br />
-Live Prototype: https://cargo-veritas.vercel.app <br />
+# 🚢 CargoVeritas — Automated Shipping Document Verification
+
+**Averis x Monash Hackathon 2026** • **Team: AppleCat**  
+🌐 **Live Platform:** [https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+
+---
 
 CargoVeritas is an automated SaaS Control Tower that connects directly to operational mailboxes, intelligently sorts incoming shipping communications, and automatically checks customer Shipping Instructions (SI) against ocean carrier draft Bills of Lading (B/L) across 7 mandatory logistics fields in seconds. Ambiguous or unreadable documents trigger a human-in-the-loop escalation rather than making blind guesses.
 
-**📑 Table of Contents**
-1. Key Features
-2. Tech Stack
-3. Prerequisites
-4. Environment Variables
-5. Google Cloud & Gmail Setup (Important for Evaluators)
-6. Local Setup & Installation
-7. Supabase Database & Storage Setup
-8. Running the Application
-9. Simulating Verification Scenarios
-10. Deployment (Vercel)
-11. Team & License
+---
 
+### 📑 Table of Contents
+1. [Key Features](#-key-features)
+2. [Tech Stack](#-tech-stack)
+3. [Prerequisites](#-prerequisites)
+4. [Environment Variables](#-environment-variables)
+5. [Google Cloud & Gmail Setup (Important for Evaluators)](#-google-cloud--gmail-setup-important-for-evaluators)
+6. [Local Setup & Installation](#-local-setup--installation)
+7. [Supabase Database & Storage Setup](#-supabase-database--storage-setup)
+8. [Running the Application](#-running-the-application)
+9. [Benchmark Evaluation Pipeline (`submission.json`)](#-benchmark-evaluation-pipeline-submissionjson)
+10. [Simulating Verification Scenarios](#-simulating-verification-scenarios)
+11. [Deployment (Vercel)](#-deployment-vercel)
+12. [Team & License](#-team--license)
+    
 ## ✨ Key Features
 
 - **Inbox Intelligence Engine**  
