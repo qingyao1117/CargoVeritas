@@ -42,21 +42,21 @@ Before getting started, make sure you have the following installed and configure
 **🔐 Environment Variables**
 Create a .env.local file in the root directory of your project:
 ```
-**Supabase Configuration (Settings > API in your Supabase dashboard)**
+# Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
-**OpenAI API Configuration**
+# OpenAI API Configuration
 OPENAI_API_KEY=sk-your-openai-api-key
 
-**Google Cloud / Gmail OAuth 2.0**
+# Google Cloud / Gmail OAuth 2.0
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback/google
+GOOGLE_REDIRECT_URI=https://cargo-veritas.vercel.app/auth/gmail/callback
 
-**Optional / App Base URL**
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+# App Base URL
+NEXT_PUBLIC_APP_URL=https://cargo-veritas.vercel.app
 ```
 **⚠️ Security Notice:** Never commit .env.local or any private API keys into your public repository. Ensure .env.local is listed in your .gitignore file.
 
@@ -68,21 +68,22 @@ Because our Google OAuth App is currently in Testing Mode (unverified sandbox), 
 To connect your personal or work Gmail address to the live deployment: Reach out to Team AppleCat with your Gmail address.We will immediately add your account under Google Cloud Console $\rightarrow$ OAuth consent screen $\rightarrow$ Test users. Once added, you can sign in and link your operational Gmail mailbox without encountering Google's Access Blocked: Authorization Error (Error 403: access_denied).
 
 **If Setting Up Your Own Local Instance:**
-1. Go to the Google Cloud Console.
-2. Create a new project (e.g., cargoveritas-dev).
-3. Navigate to APIs & Services $\rightarrow$ Library, search for Gmail API, and click Enable.
-4. Navigate to APIs & Services $\rightarrow$ OAuth consent screen:
-   - Select External and click Create. <br />
-   - Fill in the required app info (App name, User support email). <br />
-   - Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify). <br />
-   - Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails). <br />
-5. Navigate to APIs & Services $\rightarrow$ Credentials:
-   - Click Create Credentials $\rightarrow$ OAuth client ID. <br />
-   - Application type: Web application. <br />
-   - Authorized redirect URIs: <br />
-      - For local development: http://localhost:3000/api/auth/callback/google <br />
-      - For production: https://your-domain.vercel.app/api/auth/callback/google <br />
-   - Copy the generated Client ID and Client Secret into your .env.local. <br />
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project (e.g., `cargoveritas-dev`).
+3. Navigate to **APIs & Services → Library**, search for **Gmail API**, and click **Enable**.
+4. Navigate to **APIs & Services → OAuth consent screen**:
+   - Select **External** and click **Create**.
+   - Fill in the required app info (App name, User support email).
+   - Under **Scopes**, add `https://www.googleapis.com/auth/gmail.readonly`.
+   - Under **Test users**, click **+ Add Users** and enter your Gmail address.
+5. Navigate to **APIs & Services → Credentials**:
+   - Click **Create Credentials → OAuth client ID**.
+   - Application type: **Web application**.
+   - **Authorised JavaScript origins**:
+     - `https://cargo-veritas.vercel.app` (or `http://localhost:3000` for local dev)
+   - **Authorised redirect URIs**:
+     - `https://cargo-veritas.vercel.app/auth/gmail/callback` (or `http://localhost:3000/auth/gmail/callback` for local dev)
+   - Copy the generated Client ID and Client Secret into your `.env.local`.
 
 **🚀 Local Setup & Installation**
 1. Clone the Repository
