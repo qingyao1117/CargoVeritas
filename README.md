@@ -1,4 +1,4 @@
-**🚢 CargoVeritas — Automated Shipping Document Verification** 
+**🚢 CargoVeritas — Automated Shipping Document Verification** <br />
 **Averis x Monash Hackathon 2026**
 **Team: AppleCat**
 Live Prototype: https://cargo-veritas.vercel.app 
