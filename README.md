@@ -161,3 +161,27 @@ To verify production readiness locally:
 npm run build
 npm start
 ```
+
+**🧪 Simulating Verification Scenarios** <br />
+You can test the live comparison engine using the two baseline scenarios demonstrated during the hackathon: <br />
+
+**Scenario 1: Clean Pass (Auto-Cleared)** <br />
+**Input:** Shipping Instructions matching carrier Draft B/L (matching Shipper, Consignee, Notify Party, Load Port, Discharge Port, Container Count, and Gross Weight). <br />
+**Result:** System extracts all 7 fields in ~3 seconds, displays green checks across all fields, and commits the result directly to Supabase with status PASSED. <br />
+
+**Scenario 2: Gross Weight Discrepancy (Human Review)** <br />
+**Input:** Shipping Instructions stating 24,500 KG while Carrier Draft B/L reads 21,000 KG. <br />
+**Result:** System matches companies and ports, highlights the Gross Weight mismatch in red, flags the discrepancy, and queues the record into the Human-in-the-Loop review queue for 1-click Reject to Carrier action. <br />
+
+**🌐 Deployment (Vercel)** <br />
+The easiest way to deploy this repository is using Vercel: <br />
+1. Push your code to your GitHub repository.
+2. In the Vercel dashboard, click "New Project" and import your cargo-veritas repository.
+3. Configure your Environment Variables in Vercel (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI).
+4. Click Deploy. Vercel will trigger CI/CD builds on every git push.
+
+**👥 Team AppleCat** <br />
+Built for the Averis x Monash Hackathon 2026. <br />
+Project: CargoVeritas <br />
+Live Demo: Visit [cargo-veritas.vercel.app] (https://cargo-veritas.vercel.app) and click Sign Up to create an account and access the control tower. <br />
+Feedback & Questions: Open an issue in this repository.
