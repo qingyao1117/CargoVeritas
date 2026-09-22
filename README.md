@@ -124,14 +124,15 @@ Because Google OAuth is currently in **Testing Mode**, Google requires any exter
      `https://cargo-veritas.vercel.app/auth/gmail/callback` (or `http://localhost:3000/auth/gmail/callback` for local dev)
 5. Copy your **Client ID** and **Client Secret** into your `.env.local`.
 
-**🚀 Local Setup & Installation**
-1. Clone the Repository
+## 🚀 Local Setup & Installation
+
+### 1. Clone the Repository
 ```
 git clone https://github.com/your-username/cargo-veritas.git
 cd cargo-veritas
 ```
 
-2. Install Dependencies
+### 2. Install Dependencies
 Using npm:
 ```
 npm install
