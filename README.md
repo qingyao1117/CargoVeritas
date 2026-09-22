@@ -1,63 +1,60 @@
-# SDOC Hackathon — participant bundle
+**🚢 CargoVeritas — Automated Shipping Document Verification** 
+**Averis x Monash Hackathon 2026**
+**Team: AppleCat**
+Live Prototype: https://cargo-veritas.vercel.app 
 
-Build a pipeline that reads this inbox and, for each email, decides:
+CargoVeritas is an automated SaaS Control Tower that connects directly to operational mailboxes, intelligently sorts incoming shipping communications, and automatically checks customer Shipping Instructions (SI) against ocean carrier draft Bills of Lading (B/L) across 7 mandatory logistics fields in seconds. Ambiguous or unreadable documents trigger a human-in-the-loop escalation rather than making blind guesses.
 
-1. **category** — one of `BL_COMPARISON`, `SI_REQUEST`, `INVOICE_QUERY`,
-   `GENERAL`, `SPAM`.
-2. for `BL_COMPARISON` emails, compare the **Shipping Instruction (SI)** against
-   the **draft Bill of Lading (BL)** attachments and report the outcome:
-   - `status`: `OK` (all 7 fields match), `MISMATCH` (≥1 field differs), or
-     `NEEDS_REVIEW` (you cannot decide — unreadable/missing/wrong document).
-   - `has_defect` + `defect_fields` when it's a `MISMATCH`.
-   - `review_reason` when it's `NEEDS_REVIEW`
-     (`wrong_doc_type` | `missing_attachment` | `unreadable` | `missing_value`).
+**📑 Table of Contents**
+1. Key Features
+2. Tech Stack
+3. Prerequisites
+4. Environment Variables
+5. Google Cloud & Gmail Setup (Important for Evaluators)
+6. Local Setup & Installation
+7. Supabase Database & Storage Setup
+8. Running the Application
+9. Simulating Verification Scenarios
+10. Deployment (Vercel)
+11. Team & License
 
-The 7 compared fields: **shipper, consignee, notify_party, port_of_loading,
-port_of_discharge, container_count, gross_weight_kg**. Note the SI and BL often
-*label the same field differently* (`Port of Loading` vs `Load Port`) — align by
-meaning, not by header text.
+**✨ Key Features**
+**📥 Inbox Intelligence Engine:** Synchronizes operational inboxes and categorizes incoming messages into 5 clear buckets (Bill of Lading Comparison, Shipping Instruction Request, Invoice Query, General Update, Spam).
+**🔍 Automated 7-Field Cross-Alignment:** Compares Shipper, Consignee, Notify Party, Port of Loading, Port of Discharge, Container Count, and Gross Weight (kg) side-by-side in ~3 seconds.
+**🎯 Deterministic Zero-Hallucination Extraction:** OpenAI API runtime extraction with strict JSON Schema output mode and zero temperature ($T = 0.0$), eliminating false mismatches from synonymous carrier terminology (e.g., "Load Port" vs "Port of Loading").
+**🙋 Human-in-the-Loop Escalation:** Automatically flags unreadable scans, corrupt attachments, or discrepancies to an operator review queue with 1-click actions (Approve Discrepancy, Reject to Carrier, or Request Amended Docs).
+**🔒 Enterprise Persistence & Auditability:** Secure document storage and tamper-evident relational logs powered by Supabase with Row-Level Security (RLS).
 
-## Quick start
+**🛠 Tech Stack**
+**Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS
+**Authentication & Backend:** Supabase (PostgreSQL, Object Storage, Row-Level Security)
+**AI & Prompting Engine:** OpenAI API (gpt-4o / gpt-4o-mini with structured JSON mode), Google Gemini (Prompt Engineering)
+**Mailbox & Cloud Infrastructure:** Google Cloud Platform (Gmail API, OAuth 2.0), Vercel
 
-```bash
-# look at one email + its documents
-cat inbox/email_004.json
-cat attachments/email_004_SI.txt
-cat attachments/email_004_BL.txt
+**📋 Prerequisites**
+Before getting started, make sure you have the following installed and configured:
+**Node.js:** Version 18.17.0 or higher [Download Node.js](https://nodejs.org/en)
+**Package Manager:** npm (bundled with Node), pnpm, or yarn
+**Supabase Account:** A free account at [supabase.com] (https://supabase.com/)
+**OpenAI API Key:** An active key from [platform.openai.com] (https://platform.openai.com/home)
+**Google Cloud Console Account:** An active account at [console.cloud.google.com] (https://console.cloud.google.com/) to authorize Gmail API access.
 
-# or use the loader (stdlib only for the .txt path)
-python3 -c "from loader import Inbox; ib=Inbox('.'); print(len(ib.emails()),'emails')"
+**🔐 Environment Variables**
+Create a .env.local file in the root directory of your project:
 ```
+**Supabase Configuration (Settings > API in your Supabase dashboard)**
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
-```python
-from loader import Inbox
-inbox = Inbox(".")                     # this folder  (or a server URL)
-submission = {}
-for email in inbox:
-    eid = email["email_id"]
-    # ... your classify + extract + compare pipeline ...
-    submission[eid] = {
-        "category": "BL_COMPARISON",
-        "status": "MISMATCH",
-        "review_reason": None,
-        "has_defect": True,
-        "defect_fields": ["consignee"],
-    }
-import json; json.dump(submission, open("submission.json", "w"), indent=2)
+**OpenAI API Configuration**
+OPENAI_API_KEY=sk-your-openai-api-key
+
+**Google Cloud / Gmail OAuth 2.0**
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback/google
+
+**Optional / App Base URL**
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
-
-Match **`sample_submission.json`** exactly (every email_id present).
-
-## Scoring
-
-You don't have the ground truth. Either:
-- the organizers run `score_cli.py submission.json` for you, **or**
-- if they gave you the HTTP server URL:
-  ```python
-  inbox = Inbox("http://<host>:8080")
-  print(inbox.submit(submission)["final_score"])
-  ```
-
-Final score = 50% end-to-end (defects caught all the way through) + 30% Stage-1
-macro-F1 + 20% Stage-3 defect-F1. `NEEDS_REVIEW` handling is reported as a
-separate reliability axis.
