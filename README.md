@@ -65,21 +65,99 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 Because our Google OAuth App is currently in Testing Mode (unverified sandbox), Google’s security policies require that any Gmail account attempting to connect to the mailbox sync must be explicitly added as an Authorized Test User in Google Cloud Console.
 
 **If Testing with Our Hosted App:** <br />
-To connect your personal or work Gmail address to the live deployment: Reach out to Team AppleCat with your Gmail address.We will immediately add your account under Google Cloud Console $\rightarrow$ OAuth consent screen $\rightarrow$ Test users.Once added, you can sign in and link your operational Gmail mailbox without encountering Google's Access Blocked: Authorization Error (Error 403: access_denied).
+To connect your personal or work Gmail address to the live deployment: Reach out to Team AppleCat with your Gmail address.We will immediately add your account under Google Cloud Console $\rightarrow$ OAuth consent screen $\rightarrow$ Test users. Once added, you can sign in and link your operational Gmail mailbox without encountering Google's Access Blocked: Authorization Error (Error 403: access_denied).
 
 **If Setting Up Your Own Local Instance:**
 1. Go to the Google Cloud Console.
 2. Create a new project (e.g., cargoveritas-dev).
 3. Navigate to APIs & Services $\rightarrow$ Library, search for Gmail API, and click Enable.
 4. Navigate to APIs & Services $\rightarrow$ OAuth consent screen:
-   Select External and click Create.
-   Fill in the required app info (App name, User support email).
-   Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify).
-   Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails).
+   Select External and click Create. <br />
+   Fill in the required app info (App name, User support email). <br />
+   Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify). <br />
+   Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails). <br />
 5. Navigate to APIs & Services $\rightarrow$ Credentials:
-   Click Create Credentials $\rightarrow$ OAuth client ID.
-   Application type: Web application.
-   Authorized redirect URIs:
-      For local development: http://localhost:3000/api/auth/callback/google
-      For production: https://your-domain.vercel.app/api/auth/callback/google
-   Copy the generated Client ID and Client Secret into your .env.local.
+   Click Create Credentials $\rightarrow$ OAuth client ID. <br />
+   Application type: Web application. <br />
+   Authorized redirect URIs: <br />
+      For local development: http://localhost:3000/api/auth/callback/google <br />
+      For production: https://your-domain.vercel.app/api/auth/callback/google <br />
+   Copy the generated Client ID and Client Secret into your .env.local. <br />
+
+**🚀 Local Setup & Installation**
+1. Clone the Repository
+```
+git clone https://github.com/your-username/cargo-veritas.git
+cd cargo-veritas
+```
+
+2. Install Dependencies
+Using npm:
+```
+npm install
+```
+Or using pnpm:
+```
+pnpm install
+```
+
+**🗄 Supabase Database & Storage Setup**
+**1. Database Schema** <br />
+In your Supabase project dashboard, navigate to the SQL Editor and run the following script:
+```
+-- Enable UUID extension
+create extension if not exists "uuid-ossp";
+-- Table: Shipments / Verifications
+create table public.verifications (
+  id uuid default uuid_generate_v4() primary key,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  user_id uuid references auth.users(id) on delete set null,
+  email_subject text,
+  email_sender text,
+  email_category text default 'BL_CHECK',
+  status text default 'PENDING', -- 'PASSED', 'MISMATCH', 'UNREADABLE', 'APPROVED', 'REJECTED'
+  shipper_match boolean default false,
+  consignee_match boolean default false,
+  notify_party_match boolean default false,
+  pol_match boolean default false,
+  pod_match boolean default false,
+  container_count_match boolean default false,
+  gross_weight_match boolean default false,
+  si_data jsonb,
+  bl_data jsonb,
+  discrepancies jsonb,
+  rejection_notes text
+);
+
+-- Enable Row Level Security (RLS)
+alter table public.verifications enable row level security;
+
+-- Policy: Allow authenticated users to view and update verifications
+create policy "Allow authenticated read" on public.verifications
+  for select using (auth.role() = 'authenticated');
+
+create policy "Allow authenticated insert/update" on public.verifications
+  for all using (auth.role() = 'authenticated');
+```
+
+**2. Storage Buckets** <br />
+1. In the Supabase Dashboard, go to Storage > New Bucket.
+2. Create a bucket named shipping-documents.
+3. Toggle on Public bucket (or set appropriate RLS policies for authenticated access).
+4. This bucket stores customer SI PDFs and carrier draft B/L attachments.
+
+**💻 Running the Application**
+Start Development Server
+```
+npm run dev
+```
+Open your browser and navigate to:
+```
+http://localhost:3000
+```
+Production Build Test
+To verify production readiness locally:
+```
+npm run build
+npm start
+```
