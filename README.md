@@ -33,11 +33,11 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 
 **📋 Prerequisites** <br />
 Before getting started, make sure you have the following installed and configured: <br />
-**Node.js:** Version 18.17.0 or higher [Download Node.js](https://nodejs.org/en) <br />
-**Package Manager:** npm (bundled with Node), pnpm, or yarn <br />
-**Supabase Account:** A free account at [supabase.com] (https://supabase.com/) <br />
-**OpenAI API Key:** An active key from [platform.openai.com] (https://platform.openai.com/home) <br />
-**Google Cloud Console Account:** An active account at [console.cloud.google.com] (https://console.cloud.google.com/) to authorize Gmail API access. <br />
+**1. Node.js:** Version 18.17.0 or higher [Download Node.js](https://nodejs.org/en) <br />
+**2. Package Manager:** npm (bundled with Node), pnpm, or yarn <br />
+**3. Supabase Account:** A free account at [supabase.com] (https://supabase.com/) <br />
+**4. OpenAI API Key:** An active key from [platform.openai.com] (https://platform.openai.com/home) <br />
+**5. Google Cloud Console Account:** An active account at [console.cloud.google.com] (https://console.cloud.google.com/) to authorize Gmail API access. <br />
 
 **🔐 Environment Variables**
 Create a .env.local file in the root directory of your project:
@@ -58,3 +58,28 @@ GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback/google
 **Optional / App Base URL**
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
+**⚠️ Security Notice:** Never commit .env.local or any private API keys into your public repository. Ensure .env.local is listed in your .gitignore file.
+
+**⚠️ Google Cloud & Gmail Setup** (Important for Evaluators) <br />
+**Notice for Hackathon Judges & Testers:** <br />
+Because our Google OAuth App is currently in Testing Mode (unverified sandbox), Google’s security policies require that any Gmail account attempting to connect to the mailbox sync must be explicitly added as an Authorized Test User in Google Cloud Console.
+
+**If Testing with Our Hosted App:** <br />
+To connect your personal or work Gmail address to the live deployment: Reach out to Team AppleCat with your Gmail address.We will immediately add your account under Google Cloud Console $\rightarrow$ OAuth consent screen $\rightarrow$ Test users.Once added, you can sign in and link your operational Gmail mailbox without encountering Google's Access Blocked: Authorization Error (Error 403: access_denied).
+
+**If Setting Up Your Own Local Instance:**
+1. Go to the Google Cloud Console.
+2. Create a new project (e.g., cargoveritas-dev).
+3. Navigate to APIs & Services $\rightarrow$ Library, search for Gmail API, and click Enable.
+4. Navigate to APIs & Services $\rightarrow$ OAuth consent screen:
+   Select External and click Create.
+   Fill in the required app info (App name, User support email).
+   Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify).
+   Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails).
+5. Navigate to APIs & Services $\rightarrow$ Credentials:
+   Click Create Credentials $\rightarrow$ OAuth client ID.
+   Application type: Web application.
+   Authorized redirect URIs:
+      For local development: http://localhost:3000/api/auth/callback/google
+      For production: https://your-domain.vercel.app/api/auth/callback/google
+   Copy the generated Client ID and Client Secret into your .env.local.
