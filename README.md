@@ -77,7 +77,7 @@ Create a `.env.local` file in the root directory of your project:
 
 ```env
 # Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=[https://your-project-id.supabase.co](https://your-project-id.supabase.co)
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
@@ -87,10 +87,10 @@ OPENAI_API_KEY=sk-your-openai-api-key
 # Google Cloud / Gmail OAuth 2.0
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=[https://cargo-veritas.vercel.app/auth/gmail/callback](https://cargo-veritas.vercel.app/auth/gmail/callback)
+GOOGLE_REDIRECT_URI=https://cargo-veritas.vercel.app/auth/gmail/callback
 
 # App Base URL
-NEXT_PUBLIC_APP_URL=[https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+NEXT_PUBLIC_APP_URL=https://cargo-veritas.vercel.app
 ```
 
 **⚠️ Security Notice:** Never commit .env.local or any private API keys into your public repository. Ensure .env.local is listed in your .gitignore file.
