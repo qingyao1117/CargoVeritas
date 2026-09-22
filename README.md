@@ -142,50 +142,42 @@ Or using pnpm:
 pnpm install
 ```
 
-**🗄 Supabase Database & Storage Setup**
-**1. Database Schema** <br />
-In your Supabase project dashboard, navigate to the SQL Editor and run the following script:
-```
--- Enable UUID extension
-create extension if not exists "uuid-ossp";
--- Table: Shipments / Verifications
-create table public.verifications (
-  id uuid default uuid_generate_v4() primary key,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  user_id uuid references auth.users(id) on delete set null,
-  email_subject text,
-  email_sender text,
-  email_category text default 'BL_CHECK',
-  status text default 'PENDING', -- 'PASSED', 'MISMATCH', 'UNREADABLE', 'APPROVED', 'REJECTED'
-  shipper_match boolean default false,
-  consignee_match boolean default false,
-  notify_party_match boolean default false,
-  pol_match boolean default false,
-  pod_match boolean default false,
-  container_count_match boolean default false,
-  gross_weight_match boolean default false,
-  si_data jsonb,
-  bl_data jsonb,
-  discrepancies jsonb,
-  rejection_notes text
+## 🗄️ Supabase Database & Storage Setup
+
+### 1. Database Schema
+In your Supabase project dashboard, navigate to the **SQL Editor** and run the following script:
+
+```sql
+create table if not exists email_verifications (
+  email_id text primary key,
+  subject text,
+  category text,
+  status text,               -- 'OK', 'MISMATCH', 'NEEDS_REVIEW'
+  review_reason text,        -- 'missing_attachment', 'unreadable', 'missing_value'
+  defect_fields jsonb,       -- Array of mismatch field names
+  si_data jsonb,             -- Extracted 7 SI fields
+  bl_data jsonb,             -- Extracted 7 BL fields
+  operator_action text,      -- 'APPROVED', 'REJECTED', 'PENDING'
+  operator_notes text,
+  created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
 -- Enable Row Level Security (RLS)
-alter table public.verifications enable row level security;
+alter table public.email_verifications enable row level security;
 
--- Policy: Allow authenticated users to view and update verifications
-create policy "Allow authenticated read" on public.verifications
+-- Policies: Allow authenticated users to view and update verifications
+create policy "Allow authenticated read" on public.email_verifications
   for select using (auth.role() = 'authenticated');
 
-create policy "Allow authenticated insert/update" on public.verifications
+create policy "Allow authenticated insert/update" on public.email_verifications
   for all using (auth.role() = 'authenticated');
 ```
 
-**2. Storage Buckets** <br />
-1. In the Supabase Dashboard, go to Storage > New Bucket.
-2. Create a bucket named shipping-documents.
-3. Toggle on Public bucket (or set appropriate RLS policies for authenticated access).
-4. This bucket stores customer SI PDFs and carrier draft B/L attachments.
+### 2. Storage Buckets
+
+1. In the **Supabase Dashboard**, navigate to **Storage → New Bucket**.
+2. Name the bucket `shipping-documents`.
+3. Toggle on **Public bucket** (or configure appropriate RLS policies for authenticated access) to enable retrieval of customer SI PDFs and carrier draft B/L attachments.
 
 **💻 Running the Application**
 Start Development Server
