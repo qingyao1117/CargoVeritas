@@ -1,7 +1,7 @@
 **🚢 CargoVeritas — Automated Shipping Document Verification** <br />
-**Averis x Monash Hackathon 2026**
-**Team: AppleCat**
-Live Prototype: https://cargo-veritas.vercel.app 
+**Averis x Monash Hackathon 2026** <br />
+**Team: AppleCat** <br />
+Live Prototype: https://cargo-veritas.vercel.app <br />
 
 CargoVeritas is an automated SaaS Control Tower that connects directly to operational mailboxes, intelligently sorts incoming shipping communications, and automatically checks customer Shipping Instructions (SI) against ocean carrier draft Bills of Lading (B/L) across 7 mandatory logistics fields in seconds. Ambiguous or unreadable documents trigger a human-in-the-loop escalation rather than making blind guesses.
 
