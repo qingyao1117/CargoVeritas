@@ -91,6 +91,7 @@ GOOGLE_REDIRECT_URI=[https://cargo-veritas.vercel.app/auth/gmail/callback](https
 
 # App Base URL
 NEXT_PUBLIC_APP_URL=[https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+```
 
 **⚠️ Security Notice:** Never commit .env.local or any private API keys into your public repository. Ensure .env.local is listed in your .gitignore file.
 
