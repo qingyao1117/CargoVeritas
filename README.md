@@ -1,7 +1,7 @@
 # 🚢 CargoVeritas — Automated Shipping Document Verification
 
 **Averis x Monash Hackathon 2026** • **Team: AppleCat**  
-🌐 **Live Platform:** [https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+🌐 **Live Platform:** https://cargo-veritas.vercel.app
 
 ---
 
@@ -12,12 +12,12 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 ### 📑 Table of Contents
 
 1. [Key Features](#-key-features)
-2. [Tech Stack](#️-tech-stack)
+2. [Tech Stack](#-tech-stack)
 3. [Prerequisites](#-prerequisites)
 4. [Environment Variables](#-environment-variables)
 5. [Google Cloud & Gmail Setup (Important for Evaluators)](#-google-cloud--gmail-setup-important-for-evaluators)
 6. [Local Setup & Installation](#-local-setup--installation)
-7. [Supabase Database & Storage Setup](#️-supabase-database--storage-setup)
+7. [Supabase Database & Storage Setup](#-supabase-database--storage-setup)
 8. [Running the Application](#-running-the-application)
 9. [Benchmark Evaluation Pipeline (submission.json)](#-benchmark-evaluation-pipeline-submissionjson)
 10. [Simulating Verification Scenarios](#-simulating-verification-scenarios)
@@ -53,9 +53,8 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 
 ## 🛠️ Tech Stack
 
-* **Frontend & Control Tower:** Next.js (App Router), React, Tailwind CSS
-* **Backend & Verification API:** Python (FastAPI / Serverless handlers on Vercel)
-* **Database & Persistence:** Supabase (PostgreSQL, Object Storage, Row-Level Security)
+* **Backend & API:** Python (`app.py`), HTTP Serverless Handlers on Vercel[cite: 21]
+* **Database & Persistence:** Supabase (PostgreSQL, Object Storage, Row-Level Security)[cite: 21]
 * **Extraction Engine:** OpenAI API (`gpt-4o` / `gpt-4o-mini` with structured JSON mode)
 * **Document Parsing & OCR:** PyMuPDF (`fitz`), RapidOCR, `pypdf`, `python-docx`, `openpyxl`
 * **Prompt Engineering:** Google Gemini
@@ -65,25 +64,24 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 
 ## 📋 Prerequisites
 
-Before getting started, make sure you have the following installed and configured:
+Ensure you have the following installed and configured before running locally:
 
-* **Node.js:** Version 18.17.0 or higher ([Download Node.js](https://nodejs.org/en))
 * **Python:** Version 3.10 or higher ([Download Python](https://www.python.org/downloads/))
-* **Package Manager:** `npm` (bundled with Node), `pnpm`, or `yarn`
+* **Package Manager:** `pip` (bundled with Python)
 * **Supabase Account:** Free account at [supabase.com](https://supabase.com/)
 * **OpenAI API Key:** Active key from [platform.openai.com](https://platform.openai.com/home)
-* **Google Cloud Console Account:** Active account at [console.cloud.google.com](https://console.cloud.google.com/) with Gmail API enabled
+* **Google Cloud Console Account:** Active project on [console.cloud.google.com](https://console.cloud.google.com/) with Gmail API enabled
 
 ---
 
 ## 🔐 Environment Variables
 
-Create a `.env.local` file in the root directory of your project:
+Create a `.env` (or `.env.local`) file in the root directory of your project:
 
 ```env
 # Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=[https://your-project-id.supabase.co](https://your-project-id.supabase.co)
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+SUPABASE_URL=[https://your-project-id.supabase.co](https://your-project-id.supabase.co)
+SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
 # OpenAI API Configuration
@@ -95,43 +93,43 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URI=[https://cargo-veritas.vercel.app/auth/gmail/callback](https://cargo-veritas.vercel.app/auth/gmail/callback)
 
 # App Base URL
-NEXT_PUBLIC_APP_URL=[https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+APP_URL=[https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
 ```
 
 > [!WARNING]
-> **Security Notice:** Never commit `.env.local` or any private API keys into your public repository. Ensure `.env.local` is listed in your `.gitignore` file.
+> **Security Notice:** Never commit `.env` or any private API keys into your public repository. Ensure `.env` is listed in your `.gitignore` file.
 
 ---
 
 ## ⚠️ Google Cloud & Gmail Setup (Important for Evaluators)
 
 ### 📌 Sandbox Mode Notice
-Because our Google OAuth App is currently in **Testing Mode** (unverified sandbox), Google’s security policies require that any Gmail account attempting to connect to the mailbox sync must be explicitly added as an Authorized Test User in Google Cloud Console.
+Because our Google OAuth App is currently in **Testing Mode** (unverified sandbox), Google’s security policies require that any Gmail account attempting to connect to the mailbox sync must be explicitly added as an Authorized Test User in Google Cloud Console[cite: 12].
 
 * **Testing with Our Hosted App:**
   1. Visit [cargo-veritas.vercel.app](https://cargo-veritas.vercel.app) and sign up for an account.
-  2. Reach out to Team AppleCat with your Gmail address. We will immediately add your account under **Google Cloud Console → OAuth consent screen → Test users**.
-  3. Once added, you can sign in and link your operational Gmail mailbox without encountering `Error 403: access_denied`.
+  2. Reach out to Team AppleCat with your Gmail address[cite: 12]. We will immediately add your account under **Google Cloud Console → OAuth consent screen → Test users**[cite: 12].
+  3. Once added, you can sign in and link your operational Gmail mailbox without encountering `Error 403: access_denied`[cite: 12].  
   *(Note: You can fully evaluate the platform without syncing live Gmail by using the pre-seeded simulation records in the dashboard).*
 
 ---
 
 ### 💻 If Setting Up Your Own Local Instance
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a new project (e.g., `cargoveritas-dev`).
-2. Go to **APIs & Services → Library**, search for **Gmail API**, and click **Enable**.
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a new project (e.g., `cargoveritas-dev`)[cite: 12].
+2. Go to **APIs & Services → Library**, search for **Gmail API**, and click **Enable**[cite: 12].
 3. Go to **APIs & Services → OAuth consent screen**:
-   - Select **External** and click **Create**.
-   - Fill in the required app info (App name, User support email).
-   - Under **Scopes**, add `https://www.googleapis.com/auth/gmail.readonly`.
-   - Under **Test users**, click **+ Add Users** and enter your Gmail address.
+   - Select **External** and click **Create**[cite: 12, 13].
+   - Fill in the required app info (App name, User support email)[cite: 12, 13].
+   - Under **Scopes**, add `https://www.googleapis.com/auth/gmail.readonly`[cite: 12, 13].
+   - Under **Test users**, click **+ Add Users** and enter your Gmail address[cite: 13].
 4. Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**:
-   - **Application type:** Web application
+   - **Application type:** Web application[cite: 13]
    - **Authorised JavaScript origins:**  
-     `https://cargo-veritas.vercel.app` (or `http://localhost:3000` for local dev)
+     `https://cargo-veritas.vercel.app` (or `http://localhost:8000` for local dev)[cite: 13]
    - **Authorised redirect URIs:**  
-     `https://cargo-veritas.vercel.app/auth/gmail/callback` (or `http://localhost:3000/auth/gmail/callback` for local dev)
-5. Copy the generated Client ID and Client Secret into your `.env.local`.
+     `https://cargo-veritas.vercel.app/auth/gmail/callback` (or `http://localhost:8000/auth/gmail/callback` for local dev)[cite: 13]
+5. Copy the generated Client ID and Client Secret into your `.env` file[cite: 13].
 
 ---
 
@@ -143,13 +141,7 @@ git clone [https://github.com/your-username/cargo-veritas.git](https://github.co
 cd cargo-veritas
 ```
 
-### 2. Install Web Dependencies
-```bash
-npm install
-# or: pnpm install / yarn install
-```
-
-### 3. Install Python Dependencies
+### 2. Install Python Dependencies
 ```bash
 pip install -r requirements.txt
 ```
@@ -196,18 +188,11 @@ create policy "Allow authenticated insert/update" on public.email_verifications
 
 ## 💻 Running the Application
 
-### Start Development Server
+### Start Python Server
 ```bash
-npm run dev
+python app.py
 ```
-Open [http://localhost:3000](http://localhost:3000) in your browser to view the application.
-
-### Production Build Test
-To verify production readiness locally:
-```bash
-npm run build
-npm start
-```
+Open [http://localhost:8000](http://localhost:8000) (or the port specified in `app.py`) in your browser to view the application.
 
 ---
 
@@ -225,17 +210,17 @@ The script parses incoming emails, matches attachments, verifies all 7 fields, a
 
 ## 🧪 Simulating Verification Scenarios
 
-You can test the live comparison engine using the two baseline scenarios demonstrated during the hackathon:
+You can test the comparison engine using the two baseline scenarios demonstrated during the hackathon:
 
 ### Scenario 1: Clean Pass (Auto-Cleared)
 * **Input:** Shipping Instructions matching carrier Draft B/L across all 7 fields (Shipper, Consignee, Notify Party, Load Port, Discharge Port, Container Count, and Gross Weight).
-* **Result:** System extracts all 7 fields in ~3 seconds, displays green checks across all fields, and commits the result directly to Supabase with status `OK`.
+* **Result:** System extracts all 7 fields in ~3 seconds, displays matches across all fields, and commits the result directly to Supabase with status `OK`.
 
 ---
 
 ### Scenario 2: Gross Weight Discrepancy (Human Review)
 * **Input:** Shipping Instructions stating 24,500 KG while Carrier Draft B/L reads 21,000 KG.
-* **Result:** System matches companies and ports, highlights the Gross Weight mismatch in red, flags the discrepancy, and queues the record into the Human-in-the-Loop review queue for 1-click **Reject to Carrier** action.
+* **Result:** System matches companies and ports, highlights the Gross Weight mismatch, flags the discrepancy, and queues the record into the Human-in-the-Loop review queue for 1-click **Reject to Carrier** action.
 
 ---
 
@@ -246,14 +231,14 @@ The easiest way to deploy this repository is using [Vercel](https://vercel.com):
 1. Push your code to your GitHub repository.
 2. In the Vercel dashboard, click **New Project** and import your `cargo-veritas` repository.
 3. Configure your Environment Variables in Vercel:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `OPENAI_API_KEY`
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_REDIRECT_URI`
-4. Click **Deploy**. Vercel will trigger automated CI/CD builds on every git push.
+4. Click **Deploy**. Vercel will build and host the Python serverless function automatically on every git push.
 
 ---
 
