@@ -18,14 +18,14 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 10. Deployment (Vercel)
 11. Team & License
 
-**✨ Key Features**
+**✨ Key Features** <br />
 **📥 Inbox Intelligence Engine:** Synchronizes operational inboxes and categorizes incoming messages into 5 clear buckets (Bill of Lading Comparison, Shipping Instruction Request, Invoice Query, General Update, Spam). <br />
 **🔍 Automated 7-Field Cross-Alignment:** Compares Shipper, Consignee, Notify Party, Port of Loading, Port of Discharge, Container Count, and Gross Weight (kg) side-by-side in ~3 seconds. <br />
 **🎯 Deterministic Zero-Hallucination Extraction:** OpenAI API runtime extraction with strict JSON Schema output mode and zero temperature ($T = 0.0$), eliminating false mismatches from synonymous carrier terminology (e.g., "Load Port" vs "Port of Loading").<br />
 **🙋 Human-in-the-Loop Escalation:** Automatically flags unreadable scans, corrupt attachments, or discrepancies to an operator review queue with 1-click actions (Approve Discrepancy, Reject to Carrier, or Request Amended Docs). <br />
 **🔒 Enterprise Persistence & Auditability:** Secure document storage and tamper-evident relational logs powered by Supabase with Row-Level Security (RLS). <br />
 
-**🛠 Tech Stack**
+**🛠 Tech Stack** <br />
 **Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS <br />
 **Authentication & Backend:** Supabase (PostgreSQL, Object Storage, Row-Level Security) <br />
 **AI & Prompting Engine:** OpenAI API (gpt-4o / gpt-4o-mini with structured JSON mode), Google Gemini (Prompt Engineering) <br />
