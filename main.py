@@ -307,7 +307,7 @@ def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
     """Return the structured category, extraction, comparison, and review record."""
     attachments = list(attachment_texts)
     category = classify_email(email.get("subject", ""), email.get("body", ""), attachments)
-    result = {"category": category, "status": "AUTO_RESOLVED", "review_reason": None, "defect_fields": [], "si_data": {}, "bl_data": {}}
+    result = {"category": category, "status": "AUTO_RESOLVED", "review_reason": None, "has_defect": False, "defect_fields": [], "si_data": {}, "bl_data": {}}
     if category != "BL_COMPARISON":
         return result
     si_name = next((name for name in attachments if re.search(r"(?:^|[^a-z])si(?:[^a-z]|$)", name.lower()) or "shipping instruction" in name.lower()), None)
@@ -316,7 +316,7 @@ def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
         result.update(status="NEEDS_REVIEW", review_reason="missing_attachment")
         return result
     if not attachment_texts[si_name].strip() or not attachment_texts[bl_name].strip():
-        result.update(status="NEEDS_REVIEW", review_reason="unreadable_document")
+        result.update(status="NEEDS_REVIEW", review_reason="unreadable")
         return result
     si_data, bl_data = extract_fields_from_doc(attachment_texts[si_name]), extract_fields_from_doc(attachment_texts[bl_name])
     for document in (si_data, bl_data):
@@ -325,16 +325,28 @@ def process_email(email: dict, attachment_texts: dict[str, str]) -> dict:
             document["notify_party"] = document.get("consignee")
     result.update(si_data=si_data, bl_data=bl_data)
     if any(si_data[field] is None or bl_data[field] is None for field in FIELDS):
-        result.update(status="NEEDS_REVIEW", review_reason="unreadable_document")
+        result.update(status="NEEDS_REVIEW", review_reason="missing_value")
         return result
     mismatches, needs_review = compare_fields_detailed(si_data, bl_data)
-    if mismatches:
-        result.update(status="MISMATCH", defect_fields=mismatches)
-    elif needs_review:
-        result.update(status="NEEDS_REVIEW", review_reason="minor_difference", defect_fields=needs_review)
+    # The judging schema has no "minor_difference" review reason. Treat all
+    # detected differences, including near matches, as comparison defects.
+    if mismatches or needs_review:
+        result.update(status="MISMATCH", has_defect=True, defect_fields=mismatches + needs_review)
     else:
-        result.update(status="OK", defect_fields=[])
+        result.update(status="OK", has_defect=False, defect_fields=[])
     return result
+
+
+def submission_record(processed: dict) -> dict:
+    """Return exactly the public fields required by sample_submission.json."""
+    status = "OK" if processed.get("status") == "AUTO_RESOLVED" else processed.get("status")
+    return {
+        "category": processed.get("category"),
+        "status": status,
+        "review_reason": processed.get("review_reason"),
+        "defect_fields": processed.get("defect_fields", []),
+        "has_defect": bool(processed.get("has_defect")),
+    }
 
 
 def inspect_email(email_record: dict, inbox: Inbox) -> dict:
@@ -344,6 +356,6 @@ def inspect_email(email_record: dict, inbox: Inbox) -> dict:
 
 if __name__ == "__main__":
     inbox = Inbox(".")
-    output = {email["email_id"]: inspect_email(email, inbox) for email in inbox}
+    output = {email["email_id"]: submission_record(inspect_email(email, inbox)) for email in inbox}
     Path("submission.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
 
