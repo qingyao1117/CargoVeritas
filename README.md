@@ -46,25 +46,38 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 - **Audit-Ready Persistence**  
   Maintains secure attachment storage and relational verification audit logs backed by Supabase with Row-Level Security (RLS).
 
-**🛠 Tech Stack** <br />
-**1. Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS <br />
-**2. Authentication & Backend:** Supabase (PostgreSQL, Object Storage, Row-Level Security) <br />
-**3. AI & Prompting Engine:** OpenAI API (gpt-4o / gpt-4o-mini with structured JSON mode), Google Gemini (Prompt Engineering) <br />
-**4. Mailbox & Cloud Infrastructure:** Google Cloud Platform (Gmail API, OAuth 2.0), Vercel <br />
+## 🛠️ Tech Stack
 
-**📋 Prerequisites** <br />
-Before getting started, make sure you have the following installed and configured: <br />
-**1. Node.js:** Version 18.17.0 or higher [Download Node.js](https://nodejs.org/en) <br />
-**2. Package Manager:** npm (bundled with Node), pnpm, or yarn <br />
-**3. Supabase Account:** A free account at [supabase.com] (https://supabase.com/) <br />
-**4. OpenAI API Key:** An active key from [platform.openai.com] (https://platform.openai.com/home) <br />
-**5. Google Cloud Console Account:** An active account at [console.cloud.google.com] (https://console.cloud.google.com/) to authorize Gmail API access. <br />
+* **Frontend & Control Tower:** Next.js (App Router), React, Tailwind CSS
+* **Backend & Verification API:** Python (FastAPI / Serverless handlers on Vercel)
+* **Database & Document Persistence:** Supabase (PostgreSQL, Object Storage, Row-Level Security)
+* **Extraction Engine:** OpenAI API (`gpt-4o` / `gpt-4o-mini` with strict structured JSON mode)
+* **Document Parsing & OCR:** PyMuPDF (`fitz`), RapidOCR, `pypdf`, `python-docx`, `openpyxl`
+* **Prompt Engineering:** Google Gemini
+* **Cloud & Mailbox Ingestion:** Google Cloud Console (Gmail API, OAuth 2.0), Vercel
 
-**🔐 Environment Variables**
-Create a .env.local file in the root directory of your project:
-```
+---
+
+## 📋 Prerequisites
+
+Ensure you have the following installed and configured before running locally:
+
+* **Node.js:** Version 18.17.0 or higher ([Download Node.js](https://nodejs.org/en))
+* **Python:** Version 3.10 or higher ([Download Python](https://www.python.org/downloads/))
+* **Package Manager:** `npm` (bundled with Node), `pnpm`, or `yarn`
+* **Supabase Account:** Free account at [supabase.com](https://supabase.com/)
+* **OpenAI API Key:** Active API key from [platform.openai.com](https://platform.openai.com/home)
+* **Google Cloud Console:** Active project on [console.cloud.google.com](https://console.cloud.google.com/) with Gmail API enabled
+
+---
+
+## 🔐 Environment Variables
+
+Create a `.env.local` file in the root directory of your project:
+
+```env
 # Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=[https://your-project-id.supabase.co](https://your-project-id.supabase.co)
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
@@ -74,11 +87,11 @@ OPENAI_API_KEY=sk-your-openai-api-key
 # Google Cloud / Gmail OAuth 2.0
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=https://cargo-veritas.vercel.app/auth/gmail/callback
+GOOGLE_REDIRECT_URI=[https://cargo-veritas.vercel.app/auth/gmail/callback](https://cargo-veritas.vercel.app/auth/gmail/callback)
 
 # App Base URL
-NEXT_PUBLIC_APP_URL=https://cargo-veritas.vercel.app
-```
+NEXT_PUBLIC_APP_URL=[https://cargo-veritas.vercel.app](https://cargo-veritas.vercel.app)
+
 **⚠️ Security Notice:** Never commit .env.local or any private API keys into your public repository. Ensure .env.local is listed in your .gitignore file.
 
 **⚠️ Google Cloud & Gmail Setup** (Important for Evaluators) <br />
