@@ -18,12 +18,28 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 10. Deployment (Vercel)
 11. Team & License
 
-**✨ Key Features** <br />
-**1. Inbox Intelligence Engine:** Synchronizes operational inboxes and categorizes incoming messages into 5 clear buckets (Bill of Lading Comparison, Shipping Instruction Request, Invoice Query, General Update, Spam). <br />
-**2. Automated 7-Field Cross-Alignment:** Compares Shipper, Consignee, Notify Party, Port of Loading, Port of Discharge, Container Count, and Gross Weight (kg) side-by-side in ~3 seconds. <br />
-**3. Deterministic Zero-Hallucination Extraction:** OpenAI API runtime extraction with strict JSON Schema output mode and zero temperature ($T = 0.0$), eliminating false mismatches from synonymous carrier terminology (e.g., "Load Port" vs "Port of Loading").<br />
-**4. Human-in-the-Loop Escalation:** Automatically flags unreadable scans, corrupt attachments, or discrepancies to an operator review queue with 1-click actions (Approve Discrepancy, Reject to Carrier, or Request Amended Docs). <br />
-**5. Enterprise Persistence & Auditability:** Secure document storage and tamper-evident relational logs powered by Supabase with Row-Level Security (RLS). <br />
+## ✨ Key Features
+
+- **Inbox Intelligence Engine**  
+  Synchronizes operational inboxes and sorts incoming communications into 5 distinct categories:  
+  `BL_COMPARISON` • `SI_REQUEST` • `INVOICE_QUERY` • `GENERAL` • `SPAM`
+
+- **Automated 7-Field Cross-Alignment**  
+  Compares Shipping Instructions against draft Bills of Lading side-by-side in ~3 seconds across all critical fields:
+  - Shipper & Consignee
+  - Notify Party
+  - Port of Loading & Port of Discharge
+  - Container Count & Gross Weight (kg)
+
+- **Deterministic Extraction (Zero Hallucination)**  
+  Uses OpenAI structured JSON mode with temperature 0.0, aligning carrier-specific aliases (e.g., "Load Port" vs "Port of Loading") without schema errors.
+
+- **Human-in-the-Loop Escalation**  
+  Routes unreadable scans, missing files, or field mismatches directly to an operator queue featuring 1-click actions:  
+  *Approve Discrepancy* • *Reject to Carrier* • *Request Clean Copy*
+
+- **Audit-Ready Persistence**  
+  Maintains secure attachment storage and relational verification audit logs backed by Supabase with Row-Level Security (RLS).
 
 **🛠 Tech Stack** <br />
 **1. Frontend & Web Framework:** Next.js (App Router) / React, Tailwind CSS <br />
