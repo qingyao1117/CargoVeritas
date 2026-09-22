@@ -72,10 +72,10 @@ To connect your personal or work Gmail address to the live deployment: Reach out
 2. Create a new project (e.g., cargoveritas-dev).
 3. Navigate to APIs & Services $\rightarrow$ Library, search for Gmail API, and click Enable.
 4. Navigate to APIs & Services $\rightarrow$ OAuth consent screen:
-   Select External and click Create. <br />
-   Fill in the required app info (App name, User support email). <br />
-   Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify). <br />
-   Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails). <br />
+   - Select External and click Create. <br />
+   - Fill in the required app info (App name, User support email). <br />
+   - Under Scopes, add the Gmail read/metadata scopes (e.g., https://www.googleapis.com/auth/gmail.readonly or https://www.googleapis.com/auth/gmail.modify). <br />
+   - Under Test users, click + Add Users and enter your own Gmail account (and any evaluator emails). <br />
 5. Navigate to APIs & Services $\rightarrow$ Credentials:
    Click Create Credentials $\rightarrow$ OAuth client ID. <br />
    Application type: Web application. <br />
