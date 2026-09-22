@@ -53,8 +53,8 @@ CargoVeritas is an automated SaaS Control Tower that connects directly to operat
 
 ## 🛠️ Tech Stack
 
-* **Backend & API:** Python (`app.py`), HTTP Serverless Handlers on Vercel[cite: 21]
-* **Database & Persistence:** Supabase (PostgreSQL, Object Storage, Row-Level Security)[cite: 21]
+* **Backend & API:** Python (`app.py`), HTTP Serverless Handlers on Vercel
+* **Database & Persistence:** Supabase (PostgreSQL, Object Storage, Row-Level Security)
 * **Extraction Engine:** OpenAI API (`gpt-4o` / `gpt-4o-mini` with structured JSON mode)
 * **Document Parsing & OCR:** PyMuPDF (`fitz`), RapidOCR, `pypdf`, `python-docx`, `openpyxl`
 * **Prompt Engineering:** Google Gemini
